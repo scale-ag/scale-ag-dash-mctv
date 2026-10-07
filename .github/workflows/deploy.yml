@@ -47,7 +47,10 @@ jobs:
       - name: Add .nojekyll
         run: touch dist/.nojekyll
 
-      - name: Configure Pages (habilita automaticamente na 1a execucao)
+      # O Pages precisa estar ligado a mao (Settings -> Pages -> Source: GitHub
+      # Actions): o GITHUB_TOKEN nao tem permissao para criar o site do Pages,
+      # entao o enablement abaixo so serve quando ele ja existe.
+      - name: Configure Pages (Pages precisa estar ligado em Settings -> Pages -> GitHub Actions)
         uses: actions/configure-pages@v6
         with:
           enablement: true

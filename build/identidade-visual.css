@@ -1,10 +1,11 @@
 /* ============================================================================
    IDENTIDADE VISUAL — TODAS as cores da dashboard ficam AQUI.
    Este arquivo NÃO tem lógica de dados nem layout: mexa aqui para trocar cores.
-   O tema CLARO é o padrão; o ESCURO é a versão alternativa (toggle).
+   O tema ESCURO é o padrão para quem abre pela 1ª vez (app.js → applyTheme);
+   o CLARO é a alternativa (botão Tema, fica salvo no navegador).
    ============================================================================ */
 
-/* ------------------------------ TEMA CLARO (padrão) ------------------------ */
+/* ------------------------------ TEMA CLARO (toggle) ------------------------ */
 :root{
   --text-primary:#1A1D2E; --bg:#F4F5F8; --surface:#FFFFFF; --border:#E6E8EE;
   --muted:#6B7280; --ink:#1A1D2E; --selected:#DBEAFE;
@@ -28,7 +29,7 @@
   --step-gasto-bg:#FDECEC; --step-gasto-bd:#E34948;
 }
 
-/* ------------------------------ TEMA ESCURO (toggle) ----------------------- */
+/* ------------------------------ TEMA ESCURO (padrão) ----------------------- */
 :root[data-theme="dark"]{
   --text-primary:#0A0C11;      /* fundo da sidebar (mais escuro que o fundo principal) */
   --bg:#0F1117;                /* Fundo principal */

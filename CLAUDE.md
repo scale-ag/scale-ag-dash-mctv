@@ -27,12 +27,15 @@ da planilha de acompanhamento da MCTV, que se atualiza sozinho a cada ~30 min
 |---|---|---|
 | **MCTV \| ACOMPANHAMENTO GERAL \| LOOKER**, aba `Criativos` | `1X6XKBc65KVsfrFIoBHsk_rxC4iUrzu0l9VSYoaF6PHY` | `1077415496` |
 
-1 linha = **anúncio × dia**, já extraída do Meta Ads. Colunas (achadas pelo nome
-do cabeçalho em `build.py` → `COLS`): `Data` · `Anuncio_Nome` · `Campanha` ·
+1 linha = **anúncio × dia**, já extraída do Meta Ads. A aba tem estas 23 colunas: `Data` · `Anuncio_Nome` · `Campanha` ·
 `Conjunto` · `Alcance` · `Frequencia` · `Impressoes` · `CPM` · `Cliques no Link` ·
 `Gasto_Anuncio` · `Vendas` · `CPA` · `Checkouts` · `Hook_Rate` · `Hold_Rate` ·
 `Play 25%` · `Retenção 25>50%` · `Retenção 75>100%` · `Play 100%` · `CTR` · `CPC` ·
-`ROAS` · `Chave_Unica`. Números em pt-BR (`"107,00"`).
+`ROAS` · `Chave_Unica`. O build lê 19 delas pelo nome do cabeçalho (`build.py` →
+`COLS`); `Frequencia`, `CPM`, `CPA` e `Retenção 75>100%` são ignoradas, porque o
+navegador recalcula frequência, CPM e CPA (com imposto) a partir das contagens.
+Números em pt-BR (`"107,00"`); contagens e R$ sem casas decimais (`"1.019"`) são
+lidas por `to_count` (ponto = milhar).
 
 Leitura: `export?format=csv&gid=` e, se falhar, `gviz/tq?tqx=out:csv&headers=1&gid=`.
 Não use `headers=0` no gviz: ele zera o texto do cabeçalho nas colunas numéricas.
@@ -56,6 +59,9 @@ desenvolvimento novo).
   (Hook = v3/impr, Ret. 25→50 = p50/p25, Ret. 25→100 = p100/p25).
 - **Hold_Rate** vem zerado na planilha → `tem_hold=false` esconde a coluna.
 - **Chave_Unica** (id do anúncio + dia) deduplica: linha repetida fica a última.
+- **Build vazio não publica:** se a aba vier sem linhas válidas (vazia, HTML de
+  login porque deixou de ser pública, cabeçalho irreconhecível), o `build.py` sai
+  com erro e o Pages continua com a última versão boa.
 - `MAIN_PRODUCT_PREFIX = None` → entram todas as campanhas da aba (as antigas
   `[CAP] [VENDAS] ...` e as novas `MC | E4-VEN | ...`). Para restringir, ponha a
   sigla (ex. `"MC"`).
@@ -79,7 +85,7 @@ CPA · Checkout→Venda · ROAS · Ticket médio. Não há lead/MQL nesta fonte.
 ```
 build/build.py            # lê a aba Criativos (read-only), emite REGISTROS BRUTOS (meta[]); render() costura os arquivos abaixo
 build/template.html       # esqueleto HTML. Placeholders __STYLES__, __APP_JS__, __DATA_JSON__, __BUILD_ID__, __GENERATED_BRT__
-build/identidade-visual.css  # TODAS as cores (tema claro=padrão / escuro)
+build/identidade-visual.css  # TODAS as cores (tema escuro=padrão / claro no botão Tema)
 build/estilos.css         # layout/componentes
 build/app.js              # lógica + renderização (KPIs, funil, tabelas, filtro cruzado, period-picker, heatmap, Relatório)
 .github/workflows/deploy.yml  # roda build.py e publica no Pages (workflow_dispatch + schedule + push)
@@ -127,9 +133,10 @@ python build/build.py --criativos-file criativos.csv --out dist/index.html
    é `git push` direto para `github.com` com o **PAT do gestor**. Nunca gravar o
    token no `.git/config` (usar URL efêmera `https://x-access-token:<TOKEN>@github.com/...`).
 2. **cron-job.org só funciona na `main`:** `workflow_dispatch` só existe na branch padrão.
-3. **Pages:** o workflow usa `actions/configure-pages` com `enablement: true`; se a
-   primeira execução falhar no "Configure Pages", habilite em Settings → Pages →
-   Source: **GitHub Actions** e rode de novo.
+3. **Pages precisa ser ligado à mão:** Settings → Pages → Source: **GitHub Actions**.
+   O `enablement: true` do `configure-pages` não liga sozinho (o GITHUB_TOKEN não
+   tem permissão de criar o site) e a sessão do agente também não consegue (o
+   proxy bloqueia a API de Pages e a criação de repositório na org).
 4. **Proxy do sandbox:** o ambiente do agente costuma NÃO alcançar `docs.google.com`,
    `*.github.io` nem a API REST de Actions/Pages — mas o runner do Actions alcança tudo.
 5. **Token exposto:** se um token foi colado no chat, **revogar e gerar um novo**.

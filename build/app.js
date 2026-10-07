@@ -42,6 +42,17 @@ function dateActive(d){
   return (!STATE.from || d>=STATE.from) && (!STATE.to || d<=STATE.to);
 }
 const metaActive  = ()=> META.filter(m=>dateActive(m.d));
+/* período do seletor IGNORANDO os dias clicados: é o que a tabela diária lista,
+   para dar para clicar (Ctrl) em outros dias depois do primeiro */
+const rangeActive = ()=> META.filter(m=>m.d && (!STATE.from || m.d>=STATE.from) && (!STATE.to || m.d<=STATE.to));
+/* nº de dias do recorte (média por dia): dias clicados ou dias de calendário do
+   período, limitado ao intervalo que a planilha cobre */
+function periodDays(){
+  if(STATE.selDays.size) return STATE.selDays.size;
+  const f=[STATE.from,B.date_min].filter(Boolean).sort().pop(), t=[STATE.to,TODAY].filter(Boolean).sort()[0];
+  if(!f||!t||f>t) return 1;
+  return Math.round((new Date(t+'T00:00:00')-new Date(f+'T00:00:00'))/86400000)+1;
+}
 
 /* ---------------- aggregation ----------------
    Uma única fonte: a aba Criativos (1 linha = anúncio × dia). Campos do registro
@@ -116,10 +127,11 @@ function colWidth(cfg,c){ const saved=(STATE.colw[cfg.id]||{})[c.key];
   // longo de agora — senão um nome novo/maior que o salvo volta a cortar com "…".
   if(c.type==='dim'){ const auto=autoDimWidth(cfg,c); return saved?Math.max(saved,auto):auto; }
   if(saved) return saved;
-  if(c.w) return c.w;
-  if(c.type==='date') return 96;
-  if(c.type==='brl') return 110;   // "R$ 1.487,42" não cabia nos 92px padrão (cortava com "…")
-  return 92; }
+  // "R$ 1.487,42" não cabia nos 92px padrão (cortava com "…"); e o título
+  // (CHECKOUTS, RET. 25%→50%) também não pode cortar: +30 = padding + seta de
+  // ordenação, ×1,08 = letter-spacing do cabeçalho em caixa alta
+  const base=c.w||(c.type==='date'?96:c.type==='brl'?110:92);
+  return Math.max(base, Math.ceil(textWidth(String(c.label||'').toUpperCase(),FONT_HEAD)*1.08)+30); }
 function renderTable(cfg){
   // tabelas com colunas travadas EM BANDA (band:'l'/'r' — não confundir com o
   // stk:'l1'/'r' do rel-adt, esquema à parte, só 1 coluna de cada lado) usam
@@ -138,13 +150,13 @@ function renderTable(cfg){
   let rows=cfg.rows.slice();
   if(sortState){ const {key,dir}=sortState; const c=cfg.cols.find(x=>x.key===key);
     rows.sort((a,b)=>{ let va=a.cells[key], vb=b.cells[key];
-      if(c && c.type==='dim'){ va=norm(va); vb=norm(vb); return dir==='asc'?(va<vb?-1:va>vb?1:0):(va>vb?-1:va<vb?1:0); }
+      if(c && (c.type==='dim'||c.type==='date')){ va=norm(va); vb=norm(vb); return dir==='asc'?(va<vb?-1:va>vb?1:0):(va>vb?-1:va<vb?1:0); }
       va=(va==null||!isFinite(va))?-Infinity:va; vb=(vb==null||!isFinite(vb))?-Infinity:vb;
       return dir==='asc'?va-vb:vb-va; }); }
   const ext={};
   cfg.cols.forEach(c=>{ if(c.heat){ const vs=rows.map(r=>r.cells[c.key]).filter(v=>v!=null&&isFinite(v)); ext[c.key]=[Math.min(...vs),Math.max(...vs)]; }});
   // métricas de custo sempre com "R$" (mesmo em tabelas densas/fit) — % nas de taxa, sem símbolo nas demais
-  const fmt=(t,v)=> t==='roas'?roasf(v):t==='brl'?brl(v):t==='pct'?pct(v):t==='int'?intf(v):t==='num'?numf(v):t==='date'?brdate(v):t==='html'?(v==null?'-':String(v)):dimf(v);
+  const fmt=(t,v)=> t==='roas'?roasf(v):t==='brl'?brl(v):t==='pct'?pct(v):t==='int'?intf(v):t==='num'?numf(v):t==='date'?brdate(v):t==='html'?(v==null?'-':String(v)):escHtml(dimf(v));
   const widths=fit?[]:cfg.cols.map(c=>colWidth(cfg,c)); const totalW=widths.reduce((a,b)=>a+b,0);
   // modo fit: dimensão/data com largura fixa; colunas numéricas dividem o resto por igual
   const fitW=c=> c.w?c.w+'px' : c.type==='date'?'74px' : c.type==='dim'?(c.big?'210px':'116px') : '';
@@ -245,12 +257,12 @@ function renderSplitTable(cfg){
   let rows=cfg.rows.slice();
   if(sortState){ const {key,dir}=sortState; const c=cfg.cols.find(x=>x.key===key);
     rows.sort((a,b)=>{ let va=a.cells[key], vb=b.cells[key];
-      if(c && c.type==='dim'){ va=norm(va); vb=norm(vb); return dir==='asc'?(va<vb?-1:va>vb?1:0):(va>vb?-1:va<vb?1:0); }
+      if(c && (c.type==='dim'||c.type==='date')){ va=norm(va); vb=norm(vb); return dir==='asc'?(va<vb?-1:va>vb?1:0):(va>vb?-1:va<vb?1:0); }
       va=(va==null||!isFinite(va))?-Infinity:va; vb=(vb==null||!isFinite(vb))?-Infinity:vb;
       return dir==='asc'?va-vb:vb-va; }); }
   const ext={};
   cfg.cols.forEach(c=>{ if(c.heat){ const vs=rows.map(r=>r.cells[c.key]).filter(v=>v!=null&&isFinite(v)); ext[c.key]=[Math.min(...vs),Math.max(...vs)]; }});
-  const fmt=(t,v)=> t==='roas'?roasf(v):t==='brl'?brl(v):t==='pct'?pct(v):t==='int'?intf(v):t==='num'?numf(v):t==='date'?brdate(v):t==='html'?(v==null?'-':String(v)):dimf(v);
+  const fmt=(t,v)=> t==='roas'?roasf(v):t==='brl'?brl(v):t==='pct'?pct(v):t==='int'?intf(v):t==='num'?numf(v):t==='date'?brdate(v):t==='html'?(v==null?'-':String(v)):escHtml(dimf(v));
   const esc=s=>String(s==null?'':s).replace(/"/g,'&quot;');
   const leftCols=cfg.cols.filter(c=>c.band==='l'), rightCols=cfg.cols.filter(c=>c.band==='r'), midCols=cfg.cols.filter(c=>!c.band);
   function section(cols){
@@ -443,6 +455,7 @@ function chartEmpty(id, empty, msg){
 }
 function comboChart(id, d){
   destroy(id); const el=document.getElementById(id); if(!el) return;
+  chartEmpty(id, !d.length, 'Sem dados no período');
   const labels=d.map(x=>x.d.slice(5)), mut=cmuted(), gr=cgrid();
   const cCk=cvar('--chart-ck'), cVd=cvar('--chart-vendas'), cGasto=cvar('--chart-gasto'), cFat=cvar('--chart-fat')||cink();
   charts[id]=new Chart(el,{
@@ -494,6 +507,7 @@ const barLabelsPct={id:'barLabelsPct',afterDatasetsDraw(ch){const{ctx}=ch;ctx.sa
    cinza = abandonou. É a etapa mais funda do funil que existe por anúncio. */
 function donutCkVenda(id, vd, ck){
   destroy(id); const el=document.getElementById(id); if(!el) return;
+  chartEmpty(id, !ck, 'Nenhum checkout no período');
   const naoConv=Math.max(0,ck-vd);
   charts[id]=new Chart(el,{type:'doughnut',
     data:{labels:['Virou venda','Não comprou'],datasets:[{data:[vd,naoConv],
@@ -535,6 +549,7 @@ function dimChart(id, fM, agg, dim, selSet){
     const col=pal[idx%pal.length];
     return {label:String(mv), data, borderColor:col, backgroundColor:col, borderWidth:2, pointRadius:2, tension:.25, spanGaps:true};
   });
+  chartEmpty(id, !dsets.some(ds=>ds.data.some(v=>v!=null&&v!==0)), 'Sem '+M.label+' no período');
   charts[id]=new Chart(el,{type:'line',
     data:{labels:days.map(d=>d.slice(5)), datasets:dsets},
     options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'nearest',intersect:false},
@@ -596,7 +611,7 @@ function renderGeralCore(ids){
   document.getElementById(ids.funnel).innerHTML=funnelHTML(funnelSteps(t));
 
   // ---- métricas secundárias (não repetem o funil) ----
-  const dd=daily(fM), nDays=dd.length||1;
+  const dd=daily(fM), nDays=periodDays();
   const adAgg=buildAgg(fM,'ad');
   let topAd=null, bestAd=null, bestHook=null, nAdsAtivos=0;
   Object.entries(adAgg).forEach(([ad,a])=>{
@@ -611,9 +626,9 @@ function renderGeralCore(ids){
   const melhorDia=comVenda.length?comVenda.reduce((a,b)=>(b.vd>a.vd||(b.vd===a.vd&&b.fat>a.fat))?b:a):null;
   const k2=[
     {label:'Vendas por dia (média)',val:numf(t.vd/nDays),aux:brl(g/nDays)+' de gasto/dia'},
-    {label:'Melhor CPA (anúncio)',val:bestAd?brl(bestAd.v):'-',aux:bestAd?adShort(bestAd.ad):'nenhuma venda no período'},
-    {label:'Top anúncio (vendas)',val:topAd?intf(topAd.m):'-',aux:topAd?adShort(topAd.ad):'nenhuma venda no período'},
-    {label:'Melhor Hook Rate (anúncio)',val:bestHook?pct(bestHook.v):'-',aux:bestHook?adShort(bestHook.ad):'mín. '+intf(HOOK_MIN_IMPR)+' impressões'},
+    {label:'Melhor CPA (anúncio)',val:bestAd?brl(bestAd.v):'-',aux:bestAd?escHtml(adShort(bestAd.ad)):'nenhuma venda no período'},
+    {label:'Top anúncio (vendas)',val:topAd?intf(topAd.m):'-',aux:topAd?escHtml(adShort(topAd.ad)):'nenhuma venda no período'},
+    {label:'Melhor Hook Rate (anúncio)',val:bestHook?pct(bestHook.v):'-',aux:bestHook?escHtml(adShort(bestHook.ad)):'mín. '+intf(HOOK_MIN_IMPR)+' impressões'},
     {label:'Anúncios com gasto',val:intf(nAdsAtivos),aux:intf(nAdsetsAtivos)+' conjuntos · '+intf(nCampAtivas)+' campanhas'},
     {label:'Melhor dia (vendas)',val:melhorDia?intf(melhorDia.vd):'-',aux:melhorDia?brdate(melhorDia.d)+' · '+brl(melhorDia.fat):'—'},
     {label:'Retenção do vídeo 25%→50%',val:pct(dv.r2550),aux:'25%→100%: '+pct(dv.compl)},
@@ -634,15 +649,17 @@ function renderGeralCore(ids){
   hbarPct(ids.hookad, hookArr, cvar('--chart-hook'), 'Nenhum anúncio com '+intf(HOOK_MIN_IMPR)+'+ impressões');
   // CPA por anúncio (top 10 mais baratos) — barra menor = melhor, por isso ordenamos asc
   const cpaAd=items.filter(x=>x.a.vd>0&&x.a.sp>0)
-    .map(x=>({label:x.label, v:+(((x.a.sp*taxf())/x.a.vd).toFixed(2))}))
+    .map(x=>({label:x.label, v:(x.a.sp*taxf())/x.a.vd}))
     .sort((a,b)=>a.v-b.v).slice(0,10);
   hbarAsc(ids.cpaad, cpaAd);
 
-  // tabela diaria, ultimo dia no topo + heatmap
-  const dl=dd.slice().reverse();
+  // tabela diaria, ultimo dia no topo + heatmap. Lista o período inteiro; os dias
+  // clicados ficam destacados (e são o que o funil acima mostra)
+  const fR=rangeActive(), tR=totals(fR);
+  const dl=daily(fR).reverse();
   renderTable({id:ids.daily, cols:DAILY_COLS, center:true, fit:true,
     rows:dl.map(x=>{const d=derive(x); return {k:x.d, cells:dailyCells(x,d)};}),
-    total:dailyCells({...t,d:null},dv,true),
+    total:dailyCells({...tR,d:null},derive(tR),true),
     selectable:true, selSet:STATE.selDays,
     onSelect:(k,e)=>{ toggleSet(STATE.selDays,k,e&&(e.ctrlKey||e.metaKey)); syncDateInputs(); renderAll(); },
   });
@@ -701,7 +718,7 @@ function metaColorClass(v, meta){
 function metaColorClassHigh(v, meta){
   if(meta==null||v==null||!isFinite(v)||!isFinite(meta)||meta<=0) return '';
   if(v>=meta) return 'mc-green';
-  if(v>=meta/1.3) return 'mc-yellow';
+  if(v>=meta*0.7) return 'mc-yellow';
   return 'mc-red';
 }
 
@@ -725,8 +742,9 @@ function adStructMap(fM){
   return out;
 }
 /* amostra relevante para JULGAR o anúncio (senão: "Em observação"). O limiar de
-   vendas vem do painel de metas (volume mínimo amostral), editável ao vivo. */
-function adSampleOk(a){ return a.sp>=SAMPLE_MIN_SPEND && a.vd>=METAS.volMin; }
+   vendas vem do painel de metas (volume mínimo amostral), editável ao vivo. O
+   gasto comparado é o mesmo que a tabela mostra (com imposto, se ligado). */
+function adSampleOk(a){ return a.sp*taxf()>=SAMPLE_MIN_SPEND && a.vd>=METAS.volMin; }
 /* O resultado mais profundo desta conta é a VENDA: mais vendas primeiro; no
    empate, menor CPA; depois mais checkouts, menor custo/checkout e mais gasto
    (anúncio sem venda ainda é ordenado pelo sinal mais próximo dela). */
@@ -765,7 +783,7 @@ function relRenderAdTable(id,list){
   ];
   const rows=list.map(item=>{
     const cells=adRowCells(item.ad,item.a,item.struct);
-    cells.status='';  // placeholder textual; o chip real entra via afterRender
+    cells.status=item.obs?'Em observação':'Avaliável';  // texto p/ ordenar; o chip entra via afterRender
     return {k:item.ad, cells, _obs:item.obs, _cpa:cells.cpa, _roas:cells.roas};
   });
   renderTable({
@@ -813,7 +831,7 @@ function renderMetasNote(){
   const el=document.getElementById('relMetasNote'); if(!el) return;
   const cpa=METAS.cpa==null?'<b>não definida</b>':('<b>'+brl(METAS.cpa)+'</b>');
   const roas=METAS.roas==null?'<b>não definida</b>':('<b>'+roasf(METAS.roas)+'</b>');
-  el.innerHTML=`Referência ativa — Meta CPA: ${cpa} · Meta ROAS: ${roas} · Amostra mínima: <b>${intf(METAS.volMin)} venda${METAS.volMin===1?'':'s'}</b> e <b>${brl(SAMPLE_MIN_SPEND)}</b> de gasto · Corte após <b>${intf(METAS.nDias)} dias</b> fora da meta. `
+  el.innerHTML=`Referência ativa — Meta CPA: ${cpa} · Meta ROAS: ${roas} · Amostra mínima: <b>${intf(METAS.volMin)} venda${METAS.volMin===1?'':'s'}</b> e <b>${brl(SAMPLE_MIN_SPEND)}</b> de gasto · Referência de corte: <b>${intf(METAS.nDias)} dias</b> fora da meta (critério do gestor; a tabela não aplica sozinha). `
     +((METAS.cpa==null&&METAS.roas==null)?'Preencha as metas para colorir CPA e ROAS na tabela de anúncios. ':'')
     +'Código de cor: <span class="mc-lg mc-green">verde = na meta</span> <span class="mc-lg mc-yellow">amarelo = até 30% fora</span> <span class="mc-lg mc-red">vermelho = além disso</span>.';
 }
@@ -830,7 +848,9 @@ function renderRelatorio(){
   const pr=PRESETS.find(p=>p[0]===STATE.preset);
   document.getElementById('relPeriodName').textContent = STATE.selDays.size?'Dias selecionados':(pr?pr[1]:'Personalizado');
   let rangeTxt='';
-  if(STATE.from&&STATE.to){ const nD=Math.round((new Date(STATE.to+'T00:00:00')-new Date(STATE.from+'T00:00:00'))/86400000)+1;
+  if(STATE.selDays.size){ const v=[...STATE.selDays].sort();
+    rangeTxt=v.map(brdate).join(' · ')+` · ${v.length} dia${v.length>1?'s':''}`; }
+  else if(STATE.from&&STATE.to){ const nD=Math.round((new Date(STATE.to+'T00:00:00')-new Date(STATE.from+'T00:00:00'))/86400000)+1;
     rangeTxt=`${brdate(STATE.from)} a ${brdate(STATE.to)}`+(nD>0?` · ${nD} dia${nD>1?'s':''}`:''); }
   document.getElementById('relPeriodRange').textContent=rangeTxt;
 
@@ -860,7 +880,7 @@ function dailyCells(x,d,isTotal){
 /* recorte pelo filtro cruzado (campanha/conjunto/anúncio). ex = dimensão a NÃO
    filtrar — cada tabela da hierarquia ignora a própria seleção para continuar
    mostrando as linhas irmãs (multi-seleção com Ctrl). */
-function metaScope(ex){ let fM=metaActive();
+function metaScope(ex, base){ let fM=base||metaActive();
   if(ex!=='C'&&STATE.mSelC.size) fM=fM.filter(r=>STATE.mSelC.has(r.camp));
   if(ex!=='A'&&STATE.mSelA.size) fM=fM.filter(r=>STATE.mSelA.has(r.adset));
   if(ex!=='D'&&STATE.mSelAd.size) fM=fM.filter(r=>STATE.mSelAd.has(r.ad));
@@ -900,10 +920,11 @@ function renderMeta(){
       {key:'cpa',label:'CPA',type:'brl'},{key:'roas',label:'ROAS',type:'roas'}],
     rows:topRows});
 
-  const dl=daily(fM).slice().reverse();
+  const fR=metaScope(null, rangeActive()), tR=totals(fR);   // período inteiro (ver renderGeralCore)
+  const dl=daily(fR).reverse();
   renderTable({id:'tDaily', cols:DAILY_COLS, center:true, fit:true,
     rows:dl.map(x=>{const d=derive(x); return {k:x.d, cells:dailyCells(x,d)};}),
-    total:dailyCells({...t,d:null},dv,true),
+    total:dailyCells({...tR,d:null},derive(tR),true),
     selectable:true, selSet:STATE.selDays,
     onSelect:(k,e)=>{ toggleSet(STATE.selDays,k,e&&(e.ctrlKey||e.metaKey)); syncDateInputs(); renderAll(); },
   });
@@ -1090,7 +1111,7 @@ function renderFilterBar(){
         +`<b>${x.rot}:</b> ${escHtml(x.txt)}<button class="fb-x" type="button" aria-label="Remover filtro">✕</button></span>`).join('')
     + '<button class="fb-all" type="button">Remover todos</button>';
   el.querySelectorAll('.fb-x').forEach(b=>b.addEventListener('click',e=>{
-    e.stopPropagation(); f[+b.closest('.fb-chip').dataset.i].limpar(); renderAll(); }));
+    e.stopPropagation(); f[+b.closest('.fb-chip').dataset.i].limpar(); syncDateInputs(); renderAll(); }));
   el.querySelector('.fb-all').addEventListener('click',()=>{
     f.forEach(x=>x.limpar()); syncDateInputs(); renderAll(); });
 }
@@ -1139,6 +1160,7 @@ document.getElementById('buildFoot2').textContent='· build __BUILD_ID__';
 
 syncDateInputs();
 setPage(location.hash==='#meta'?'meta':(location.hash==='#rel'?'rel':'geral'));
+window.addEventListener('hashchange',()=>{ const p=location.hash==='#meta'?'meta':(location.hash==='#rel'?'rel':'geral'); if(p!==STATE.page) setPage(p); });
 
 /* auto-refresh com cache-bust ~30 min */
 setTimeout(()=>{ location.href=location.pathname+'?t='+Date.now()+location.hash; }, 30*60*1000);

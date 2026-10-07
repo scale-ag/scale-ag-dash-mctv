@@ -110,6 +110,10 @@ def fetch_csv(url: str) -> list[list[str]]:
         try:
             with urllib.request.urlopen(req, timeout=180) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
+            # planilha que deixou de ser pública redireciona para o login do
+            # Google com HTTP 200: isso é HTML, não CSV
+            if raw.lstrip()[:1] == "<":
+                raise ValueError(f"resposta em HTML, não CSV: {url}")
             return list(csv.reader(io.StringIO(raw)))
         except urllib.error.HTTPError:
             raise                       # 401/404 nao melhoram tentando de novo
@@ -125,8 +129,8 @@ def fetch_csv(url: str) -> list[list[str]]:
 def fetch_sheet(sid: str, gid: str) -> list[list[str]]:
     try:
         return fetch_csv(EXPORT_URL.format(sid=sid, gid=gid))
-    except urllib.error.HTTPError as exc:
-        print(f"[fetch_sheet] export respondeu {exc.code}; lendo pelo gviz", file=sys.stderr)
+    except Exception as exc:            # HTTP 4xx, HTML de login, timeout...
+        print(f"[fetch_sheet] export falhou ({exc!r}); lendo pelo gviz", file=sys.stderr)
         return fetch_csv(GVIZ_URL.format(sid=sid, gid=gid))
 
 
@@ -162,6 +166,17 @@ def to_float(v) -> float:
         return float(s)
     except ValueError:
         return 0.0
+
+
+def to_count(v) -> float:
+    """Contagens e valores em R$. Se alguém tirar as casas decimais da coluna na
+    planilha, o export passa a mostrar "1.019" (pt-BR: ponto = milhar), que o
+    to_float leria como 1,019. Só para estas colunas — numa taxa como o ROAS um
+    "2.125" sem vírgula pode ser decimal de verdade."""
+    s = re.sub(r"[^\d,.\-]", "", str(v if v is not None else "").strip())
+    if "," not in s and re.fullmatch(r"-?\d{1,3}(\.\d{3})+", s):
+        s = s.replace(".", "")
+    return to_float(s)
 
 
 def parse_date(v: str) -> str | None:
@@ -205,6 +220,8 @@ def header_index(header, wanted, fallback):
     # Se ele foi reconhecido, coluna ausente fica ausente — usar a posição dela
     # leria outra métrica no lugar (ex.: Checkouts no lugar de Cliques).
     if sum(v is not None for v in idx.values()) < len(wanted) // 2:
+        if "data" not in hn:
+            raise SystemExit(f"Cabeçalho da aba Criativos irreconhecível: {header[:6]}")
         return dict(fallback)
     return idx
 
@@ -282,13 +299,13 @@ def process(rows):
         if MAIN_PRODUCT_PREFIX and not norm(camp).startswith(norm(MAIN_PRODUCT_PREFIX)):
             fora_prefixo += 1
             continue
-        sp = to_float(cell(row, ix["spent"]))
-        im = to_float(cell(row, ix["impr"]))
+        sp = to_count(cell(row, ix["spent"]))
+        im = to_count(cell(row, ix["impr"]))
         cpc = to_float(cell(row, ix["cpc"]))
         ctr = to_float(cell(row, ix["ctr"]))
         hook = to_float(cell(row, ix["hook"]))
         hold = to_float(cell(row, ix["hold"]))
-        p25 = to_float(cell(row, ix["p25"]))
+        p25 = to_count(cell(row, ix["p25"]))
         roas = to_float(cell(row, ix["roas"]))
         rec = {
             "d": day,
@@ -297,17 +314,17 @@ def process(rows):
             "ad": cell(row, ix["ad"]) or "(sem anúncio)",
             "sp": round(sp, 4),
             "im": im,
-            "rc": to_float(cell(row, ix["reach"])),
+            "rc": to_count(cell(row, ix["reach"])),
             "cl": clicks_of(cell(row, ix["clicks"]), sp, cpc, ctr, im),
-            "ck": to_float(cell(row, ix["checkouts"])),
-            "vd": to_float(cell(row, ix["vendas"])),
+            "ck": to_count(cell(row, ix["checkouts"])),
+            "vd": to_count(cell(row, ix["vendas"])),
             "fat": round(roas * sp, 2),
             # contagens de vídeo (ver docstring): % -> número de pessoas
             "v3": round(hook * im / 100.0, 2),
             "hd": round(hold * im / 100.0, 2),
             "p25": p25,
             "p50": round(to_float(cell(row, ix["r2550"])) * p25 / 100.0, 2),
-            "p100": to_float(cell(row, ix["p100"])),
+            "p100": to_count(cell(row, ix["p100"])),
         }
         # Chave_Unica = id do anúncio + dia. Linha repetida (mesma chave) não
         # pode somar duas vezes: fica a última.
@@ -386,10 +403,16 @@ def main():
     rows = (read_csv_file(args.criativos_file) if args.criativos_file
             else fetch_sheet(SPREADSHEET_ID, GID_CRIATIVOS))
     data = process(rows)
+    if not data["meta"]:
+        # aba vazia (extração reescrevendo), HTML ou outra aba: falhar aqui faz o
+        # Actions parar antes do deploy e o Pages segue com a última versão boa
+        raise SystemExit("ERRO: a aba Criativos veio sem nenhuma linha válida; "
+                         "abortando para não publicar uma dash zerada")
 
+    html = render(data, args.template)      # antes de abrir o arquivo: erro aqui não deixa index.html vazio
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
-        f.write(render(data, args.template))
+        f.write(html)
 
     b = data["build"]
     d = b["linhas_descartadas"]

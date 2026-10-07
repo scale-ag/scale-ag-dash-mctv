@@ -6,9 +6,10 @@ O disparo por `workflow_dispatch` (o que o cron-job.org usa) **só existe quando
 workflow está na `main`**. Neste repositório o código já foi publicado direto na
 `main`, então este passo já está feito.
 
-Na **primeira execução** o próprio workflow tenta **habilitar o GitHub Pages**
-(`actions/configure-pages` com `enablement: true`); se falhar nesse passo, ligue em
-Settings → Pages → Source: **GitHub Actions** e rode de novo. Depois de rodar
+**Ligue o GitHub Pages à mão (obrigatório, uma vez):** Settings → Pages →
+*Build and deployment* → Source: **GitHub Actions**. O workflow não consegue
+ligar sozinho: o token automático do Actions não tem permissão para criar o
+site do Pages, e sem isso toda execução falha no passo *Configure Pages*. Depois de rodar
 uma vez, a página fica no ar em:
 
 **https://scale-ag.github.io/scale-ag-dash-mctv/**

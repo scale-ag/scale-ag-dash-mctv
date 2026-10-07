@@ -1,5 +1,12 @@
 # Guia de Replicação — Dashboard de BI estática (HTML/CSS/JS + Chart.js)
 
+> **Guia genérico do modelo da agência, copiado de `giaco---FORM7`.** Neste repo
+> (MCTV) a fonte é uma só (aba Criativos, registros `meta[]` sem leads nem dados
+> pessoais), `STATE.tax=true` com período padrão "Este mês", o `renderTable` está
+> em `build/app.js`, o **Pages precisa ser ligado à mão** (Settings → Pages →
+> GitHub Actions) e não existem `GUIA-RELATORIOS.md` nem `relatorios.json`. Para
+> o que vale aqui, siga o `CLAUDE.md`.
+
 Este guia contém **tudo** para replicar este modelo de dashboard para outros
 relatórios/clientes: arquitetura, CSS, JavaScript, lógicas de gráficos e tabelas,
 e o passo a passo de publicação (incluindo como resolver os problemas que já
@@ -209,9 +216,10 @@ Ordem de colunas das tabelas de resultado (padrão do cliente):
    git push "https://x-access-token:<TOKEN>@github.com/<owner>/<repo>.git" main:main
    ```
    Não persista o token no `.git/config` (use a URL efêmera acima).
-3. **GitHub Pages liga sozinho:** `actions/configure-pages@v5` com `enablement: true`
-   + `permissions: {pages: write, id-token: write}` habilita o Pages na 1ª execução.
-   Fonte deve ficar **Source = GitHub Actions** (Settings → Pages).
+3. **GitHub Pages:** ligue à mão em Settings → Pages → **Source = GitHub Actions**
+   antes do 1º deploy. O `enablement: true` do `actions/configure-pages` não
+   consegue criar o site com o GITHUB_TOKEN (falha com "Resource not accessible by
+   integration"); ele só é inofensivo quando o Pages já existe.
 4. **cron-job.org** (a cada 30 min):
    - URL: `https://api.github.com/repos/<owner>/<repo>/actions/workflows/deploy.yml/dispatches`
    - Método: `POST` · Body: `{"ref":"main"}`
