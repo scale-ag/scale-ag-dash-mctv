@@ -88,7 +88,7 @@ build/template.html       # esqueleto HTML. Placeholders __STYLES__, __APP_JS__,
 build/identidade-visual.css  # TODAS as cores (tema escuro=padrão / claro no botão Tema)
 build/estilos.css         # layout/componentes
 build/app.js              # lógica + renderização (KPIs, funil, tabelas, filtro cruzado, period-picker, heatmap, Relatório)
-.github/workflows/deploy.yml  # roda build.py e publica no Pages (workflow_dispatch + schedule + push)
+.github/workflows/deploy.yml  # roda build.py e publica no Pages via branch gh-pages (workflow_dispatch + schedule + push)
 dist/index.html           # saída gerada (gitignored; o Actions reconstrói)
 GUIA-REPLICACAO.md        # como replicar este modelo para outros clientes
 SETUP-CRON.md             # valores exatos do cron-job.org (só o token fica como TOKEN_AQUI)
@@ -133,10 +133,14 @@ python build/build.py --criativos-file criativos.csv --out dist/index.html
    é `git push` direto para `github.com` com o **PAT do gestor**. Nunca gravar o
    token no `.git/config` (usar URL efêmera `https://x-access-token:<TOKEN>@github.com/...`).
 2. **cron-job.org só funciona na `main`:** `workflow_dispatch` só existe na branch padrão.
-3. **Pages precisa ser ligado à mão:** Settings → Pages → Source: **GitHub Actions**.
-   O `enablement: true` do `configure-pages` não liga sozinho (o GITHUB_TOKEN não
-   tem permissão de criar o site) e a sessão do agente também não consegue (o
-   proxy bloqueia a API de Pages e a criação de repositório na org).
+3. **Pages publica pela branch `gh-pages`:** o GITHUB_TOKEN não consegue criar o
+   site no modo "GitHub Actions" (`configure-pages` com `enablement` falha com
+   "Resource not accessible by integration") e o proxy da sessão bloqueia a API
+   de Pages. O que funcionou: a sessão empurrou uma branch `gh-pages` com o
+   `index.html`, e esse primeiro push **ligou o Pages sozinho** (Deploy from a
+   branch → `gh-pages`). O `deploy.yml` lê o `build_type` do Pages a cada
+   execução: `workflow` → upload + `deploy-pages`; qualquer outro → commit órfão
+   com push forçado na `gh-pages` (a branch guarda só a versão atual).
 4. **Proxy do sandbox:** o ambiente do agente costuma NÃO alcançar `docs.google.com`,
    `*.github.io` nem a API REST de Actions/Pages — mas o runner do Actions alcança tudo.
 5. **Token exposto:** se um token foi colado no chat, **revogar e gerar um novo**.

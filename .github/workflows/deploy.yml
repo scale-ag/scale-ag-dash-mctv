@@ -15,9 +15,10 @@ on:
       - "build/**"
       - ".github/workflows/deploy.yml"
 
-# Somente leitura do repo + permissao para publicar no Pages
+# contents: write so para empurrar o build na branch gh-pages (nunca na main);
+# pages/id-token para o modo "GitHub Actions" do Pages
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -26,12 +27,17 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# O Pages deste repo publica a partir da branch gh-pages (Settings -> Pages ->
+# Deploy from a branch). Ele foi ligado assim porque o GITHUB_TOKEN nao consegue
+# criar o site no modo "GitHub Actions", e o primeiro push da branch gh-pages
+# liga o Pages sozinho. O workflow descobre o modo a cada execucao:
+#  - build_type "workflow" (Source: GitHub Actions) -> upload + deploy-pages;
+#  - qualquer outro (branch ou desligado)            -> forca o build na gh-pages.
 jobs:
-  build-deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    outputs:
+      modo: ${{ steps.modo.outputs.modo }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -47,19 +53,48 @@ jobs:
       - name: Add .nojekyll
         run: touch dist/.nojekyll
 
-      # O Pages precisa estar ligado a mao (Settings -> Pages -> Source: GitHub
-      # Actions): o GITHUB_TOKEN nao tem permissao para criar o site do Pages,
-      # entao o enablement abaixo so serve quando ele ja existe.
-      - name: Configure Pages (Pages precisa estar ligado em Settings -> Pages -> GitHub Actions)
-        uses: actions/configure-pages@v6
-        with:
-          enablement: true
+      - name: Descobre como o Pages publica
+        id: modo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bt=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq .build_type 2>/dev/null || true)
+          echo "Pages build_type: ${bt:-desligado}"
+          if [ "$bt" = "workflow" ]; then
+            echo "modo=actions" >> "$GITHUB_OUTPUT"
+          else
+            echo "modo=branch" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Um commit orfao por execucao, com push forcado: a branch guarda so a
+      # versao atual e nao cresce 48 commits por dia.
+      - name: Publica na branch gh-pages
+        if: steps.modo.outputs.modo == 'branch'
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Atualiza a dash ($(date -u +%Y-%m-%dT%H:%MZ))"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages:gh-pages
 
       - name: Upload artifact
+        if: steps.modo.outputs.modo == 'actions'
         uses: actions/upload-pages-artifact@v5
         with:
           path: dist
 
+  deploy:
+    needs: build
+    if: needs.build.outputs.modo == 'actions'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v5

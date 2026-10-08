@@ -6,11 +6,12 @@ O disparo por `workflow_dispatch` (o que o cron-job.org usa) **só existe quando
 workflow está na `main`**. Neste repositório o código já foi publicado direto na
 `main`, então este passo já está feito.
 
-**Ligue o GitHub Pages à mão (obrigatório, uma vez):** Settings → Pages →
-*Build and deployment* → Source: **GitHub Actions**. O workflow não consegue
-ligar sozinho: o token automático do Actions não tem permissão para criar o
-site do Pages, e sem isso toda execução falha no passo *Configure Pages*. Depois de rodar
-uma vez, a página fica no ar em:
+**GitHub Pages:** já está ligado, publicando a partir da branch `gh-pages`
+(Settings → Pages → *Deploy from a branch* → `gh-pages` / root). O primeiro push
+dessa branch ligou o Pages sozinho, e cada execução do workflow força o build
+novo nela. Se um dia trocarem o Source para **GitHub Actions**, o workflow
+percebe e passa a publicar por `deploy-pages`, sem precisar mexer em nada. A
+página fica no ar em:
 
 **https://scale-ag.github.io/scale-ag-dash-mctv/**
 

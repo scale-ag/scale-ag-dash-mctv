@@ -28,7 +28,8 @@ padrão; fator 13,806%). Três páginas:
 ## Como atualiza
 
 `.github/workflows/deploy.yml` roda `python build/build.py --out dist/index.html`
-e publica `dist/` no Pages. Disparo: cron-job.org a cada 30 min (ver
+e publica `dist/` no Pages (pela branch `gh-pages`, ou por `deploy-pages` se o
+Source do Pages for trocado para GitHub Actions). Disparo: cron-job.org a cada 30 min (ver
 `SETUP-CRON.md`), `schedule` nativo como backup e `push` na `main`.
 
 ## Rodar local
