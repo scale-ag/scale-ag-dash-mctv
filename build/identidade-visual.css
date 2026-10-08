@@ -15,14 +15,15 @@
   /* séries de gráfico (paleta) */
   --cc1:#3B5BDB; --cc2:#1BAF7A; --cc3:#E34948; --cc4:#E8A400; --cc5:#8AA0F0;
   --cc6:#9B59B6; --cc7:#16A085; --cc8:#E67E22; --cc9:#F97316; --cc10:#6366F1;
-  /* séries semânticas dos gráficos (Checkouts/Vendas/Gasto/Faturamento/CPA/Hook) */
+  /* séries semânticas dos gráficos (Checkouts/Vendas/Gasto/Faturamento/Custo/Connect/tráfego) */
   --chart-ck:#3B5BDB; --chart-vendas:#1BAF7A; --chart-gasto:#E34948;
-  --chart-fat:#1A1D2E; --chart-cpa:#9B59B6; --chart-hook:#0EA5C6;
+  --chart-fat:#1A1D2E; --chart-cpa:#9B59B6; --chart-connect:#0EA5C6;
+  --chart-lc:#8AA0F0; --chart-lpv:#0EA5C6;
   /* barras auxiliares */
   --bar-q:#1BAF7A; --bar-noq:#B3B1A8;
   /* heatmap por coluna (uma cor fixa por métrica; a opacidade varia no JS) */
-  /* Gasto vermelho · Checkouts azul · Hook ciano · Vendas verde · ROAS amarelo */
-  --heat-gasto:#E34948; --heat-ck:#3B5BDB; --heat-hook:#0EA5C6; --heat-vendas:#1BAF7A; --heat-roas:#E8A400;
+  /* Gasto vermelho · Checkouts azul · Connect Rate ciano · Vendas verde · ROAS amarelo */
+  --heat-gasto:#E34948; --heat-ck:#3B5BDB; --heat-connect:#0EA5C6; --heat-vendas:#1BAF7A; --heat-roas:#E8A400;
   /* destaque de etapas do funil: Gasto avermelhado · Vendas esverdeado · Faturamento amarelado */
   --step-venda-bg:#E6F7EF; --step-venda-bd:#1BAF7A;
   --step-fat-bg:#FDF5E1; --step-fat-bd:#E8A400;
@@ -54,11 +55,12 @@
   --cc6:#1FD5EC; --cc7:#FF4D8D; --cc8:#9BE015; --cc9:#FF8A1F; --cc10:#6D7BFF;
   /* linhas semânticas dos gráficos (vívidas) */
   --chart-ck:#2F6BFF; --chart-vendas:#16D66B; --chart-gasto:#FF3B47;
-  --chart-fat:#F2F3F5; --chart-cpa:#9D5CFF; --chart-hook:#1FD5EC;
+  --chart-fat:#F2F3F5; --chart-cpa:#9D5CFF; --chart-connect:#1FD5EC;
+  --chart-lc:#6D7BFF; --chart-lpv:#1FD5EC;
   /* barras auxiliares */
   --bar-q:#16D66B; --bar-noq:#5A6070;
-  /* heatmap por coluna: Gasto vermelho · Checkouts azul · Hook ciano · Vendas verde · ROAS amarelo */
-  --heat-gasto:#EF4444; --heat-ck:#3B82F6; --heat-hook:#06B6D4; --heat-vendas:#22C55E; --heat-roas:#F59E0B;
+  /* heatmap por coluna: Gasto vermelho · Checkouts azul · Connect Rate ciano · Vendas verde · ROAS amarelo */
+  --heat-gasto:#EF4444; --heat-ck:#3B82F6; --heat-connect:#06B6D4; --heat-vendas:#22C55E; --heat-roas:#F59E0B;
   /* destaque de etapas do funil: Gasto avermelhado · Vendas esverdeado · Faturamento amarelado */
   --step-venda-bg:#142E22; --step-venda-bd:#22C55E;
   --step-fat-bg:#33290F; --step-fat-bd:#F59E0B;

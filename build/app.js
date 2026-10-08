@@ -1,20 +1,21 @@
 "use strict";
 const DATA = JSON.parse(document.getElementById('payload').textContent);
-const META = DATA.meta, B = DATA.build;
+const FIN = DATA.fin, B = DATA.build;
 const TAX = B.tax_factor || 1.0;
-const TEM_HOLD = !!B.tem_hold;   // Hold_Rate vem zerado na planilha => coluna escondida
 
 /* ---------------- format ---------------- */
 const nf0=new Intl.NumberFormat('pt-BR',{maximumFractionDigits:0});
 const nf1=new Intl.NumberFormat('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1});
 const nf2=new Intl.NumberFormat('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
-const brl=v=>(v==null||!isFinite(v))?'-':'R$ '+nf2.format(v);
+// lucro pode ser negativo: "-R$ 190,59" (e não "R$ -190,59")
+const brl=v=>(v==null||!isFinite(v))?'-':(v<0?'-R$ '+nf2.format(-v):'R$ '+nf2.format(v));
 const pct=v=>(v==null||!isFinite(v))?'-':nf2.format(v*100)+'%';
 const intf=v=>(v==null||!isFinite(v))?'-':nf0.format(v);
 const numf=v=>(v==null||!isFinite(v))?'-':nf1.format(v);
 const roasf=v=>(v==null||!isFinite(v))?'-':nf2.format(v)+'x';
 const dimf=v=>v==null?'-':String(v);
 const norm=s=>(s==null?'':String(s)).trim().toLowerCase();
+const escHtml=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const brdate=d=>{ if(!d) return '-'; const p=d.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; };
 const WD=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 const weekday=d=>{ const dt=new Date(d+'T00:00:00'); return isNaN(dt)?'':WD[dt.getDay()]; };
@@ -29,8 +30,6 @@ const TODAY = B.today || B.date_max;
 const STATE = {
   page:'geral', from:(()=>{const [y,m]=TODAY.split('-'); return `${y}-${m}-01`;})(), to:TODAY, preset:'mes', tax:true,
   selDays:new Set(),
-  mSelC:new Set(), mSelA:new Set(), mSelAd:new Set(),
-  dimMetric:'gasto',   // métrica dos gráficos de linha da hierarquia (Gasto/CTR/Hook/CPA)
   sort:{}, colw: JSON.parse(localStorage.getItem('dm_colw')||'{}'),
 };
 const taxf = ()=> STATE.tax ? TAX : 1;
@@ -41,10 +40,10 @@ function dateActive(d){
   if(STATE.selDays.size) return STATE.selDays.has(d);
   return (!STATE.from || d>=STATE.from) && (!STATE.to || d<=STATE.to);
 }
-const metaActive  = ()=> META.filter(m=>dateActive(m.d));
+const finActive  = ()=> FIN.filter(r=>dateActive(r.d));
 /* período do seletor IGNORANDO os dias clicados: é o que a tabela diária lista,
    para dar para clicar (Ctrl) em outros dias depois do primeiro */
-const rangeActive = ()=> META.filter(m=>m.d && (!STATE.from || m.d>=STATE.from) && (!STATE.to || m.d<=STATE.to));
+const rangeActive = ()=> FIN.filter(r=>r.d && (!STATE.from || r.d>=STATE.from) && (!STATE.to || r.d<=STATE.to));
 /* nº de dias do recorte (média por dia): dias clicados ou dias de calendário do
    período, limitado ao intervalo que a planilha cobre */
 function periodDays(){
@@ -55,44 +54,42 @@ function periodDays(){
 }
 
 /* ---------------- aggregation ----------------
-   Uma única fonte: a aba Criativos (1 linha = anúncio × dia). Campos do registro
-   (build.py): sp=gasto (sem imposto) · im=impressões · rc=alcance · cl=cliques ·
-   ck=checkouts · vd=vendas · fat=faturamento (ROAS da planilha × gasto) ·
-   v3/hd = pessoas que passaram do hook/hold · p25/p50/p100 = plays do vídeo.
-   Tudo é SOMA, então as taxas (Hook, retenção, ROAS) saem ponderadas pelo volume
-   e batem com o que o gerenciador mostra para o período.
-   Funil: Gasto → Impressões → Alcance → Cliques → Checkouts → Vendas → Faturamento.
+   Uma única fonte: a aba Financeiro (1 linha = 1 dia). Campos do registro
+   (build.py): sp=investimento no Meta (sem imposto) · im=impressões (Cliques ÷
+   CTR) · cl=cliques · lc=cliques no link · lpv=visualizações da página de
+   destino · ck=checkouts · vd=vendas · fb/fl=faturamento bruto/líquido.
+   Tudo é SOMA, então as taxas (CTR, Connect Rate, ROAS, CPA) saem ponderadas
+   pelo volume do período, e não pela média das taxas de cada dia.
    O imposto (taxf) multiplica SÓ o gasto; faturamento nunca leva imposto, então
-   ROAS = faturamento ÷ (gasto × imposto). */
-const FIELDS=['sp','im','rc','cl','ck','vd','fat','v3','hd','p25','p50','p100'];
+   ROAS = faturamento ÷ (gasto × imposto) e Lucro = líquido − gasto × imposto. */
+const FIELDS=['sp','im','cl','lc','lpv','ck','vd','fb','fl'];
 const zeroAgg=()=>{ const a={}; FIELDS.forEach(f=>{a[f]=0;}); return a; };
 function addTo(a,r){ FIELDS.forEach(f=>{ a[f]+=r[f]||0; }); return a; }
 function derive(a){
-  const g=a.sp*taxf();
-  return {gasto:g, impr:a.im, reach:a.rc, clicks:a.cl, ck:a.ck, vd:a.vd, fat:a.fat,
-    cpm:a.im?g/a.im*1000:null, freq:a.rc?a.im/a.rc:null,
-    ctr:a.im?a.cl/a.im:null, cpc:a.cl?g/a.cl:null,
-    cpck:a.ck?g/a.ck:null, convck:a.cl?a.ck/a.cl:null,
-    cpa:a.vd?g/a.vd:null, conv:a.cl?a.vd/a.cl:null, ckv:a.ck?a.vd/a.ck:null,
-    roas:g?a.fat/g:null, ticket:a.vd?a.fat/a.vd:null,
-    hook:a.im?a.v3/a.im:null, hold:a.im?a.hd/a.im:null,
-    r2550:a.p25?a.p50/a.p25:null, compl:a.p25?a.p100/a.p25:null};
-}
-function buildAgg(fM,dim){
-  const m={};
-  fM.forEach(r=>{ const k=r[dim]; addTo(m[k]||(m[k]=zeroAgg()), r); });
-  return m;
+  const g=a.sp*taxf(), lucro=a.fl-g;
+  return {gasto:g, lucro,
+    cpm:a.im?g/a.im*1000:null, ctr:a.im?a.cl/a.im:null, cpc:a.cl?g/a.cl:null,
+    ctrl:a.im?a.lc/a.im:null, cpcl:a.lc?g/a.lc:null,
+    connect:a.lc?a.lpv/a.lc:null, cplpv:a.lpv?g/a.lpv:null,
+    cpck:a.ck?g/a.ck:null, lpvck:a.lpv?a.ck/a.lpv:null,
+    cpa:a.vd?g/a.vd:null, ckv:a.ck?a.vd/a.ck:null, convpag:a.lpv?a.vd/a.lpv:null,
+    roas:g?a.fb/g:null, roasl:g?a.fl/g:null, ticket:a.vd?a.fb/a.vd:null,
+    taxa:a.fb?(a.fb-a.fl)/a.fb:null,             // taxas da plataforma de venda (% do bruto)
+    roi:g?lucro/g:null, margem:a.fb?lucro/a.fb:null};
 }
 function totals(fM){ const a=zeroAgg(); fM.forEach(r=>addTo(a,r)); return a; }
-/* agregação diária */
+/* agregação diária (a aba já tem 1 linha por dia; agrupar mantém a regra caso
+   um dia apareça repetido) */
 function daily(fM){
   const days={};
   fM.forEach(r=>{ if(!r.d) return; addTo(days[r.d]||(days[r.d]={d:r.d,...zeroAgg()}), r); });
   return Object.values(days).sort((a,b)=>a.d<b.d?-1:1);
 }
+/* semana começando na segunda-feira (chave = data da segunda) */
+function weekStart(d){ const dt=new Date(d+'T00:00:00'); const dow=(dt.getDay()+6)%7; dt.setDate(dt.getDate()-dow); return dstr(dt); }
 
 /* ---------------- generic interactive table ---------------- */
-/* cfg: {id, cols:[{key,label,type,dim?,heat?:'gasto'|'ck'|'hook'|'vendas'|'roas',cls?}], rows:[{k,cells:{}, raw?}],
+/* cfg: {id, cols:[{key,label,type,dim?,heat?:'gasto'|'ck'|'connect'|'vendas'|'roas',cls?}], rows:[{k,cells:{}, raw?}],
         total:{}, selectable, selSet, onSelect } */
 // medição de texto (canvas) p/ auto-largura de coluna — "caiba o nome inteiro" (dim)
 // e auto-ajuste em duplo-clique na borda, como Google Sheets / Looker Studio.
@@ -133,15 +130,6 @@ function colWidth(cfg,c){ const saved=(STATE.colw[cfg.id]||{})[c.key];
   const base=c.w||(c.type==='date'?96:c.type==='brl'?110:92);
   return Math.max(base, Math.ceil(textWidth(String(c.label||'').toUpperCase(),FONT_HEAD)*1.08)+30); }
 function renderTable(cfg){
-  // tabelas com colunas travadas EM BANDA (band:'l'/'r' — não confundir com o
-  // stk:'l1'/'r' do rel-adt, esquema à parte, só 1 coluna de cada lado) usam
-  // um motor separado — ver renderSplitTable — porque aqui há VÁRIAS colunas
-  // coladas de cada lado, e a soma delas pode superar a largura do card:
-  // position:sticky por célula nesse caso gruda as bandas por cima do miolo
-  // em vez de ao lado (o miolo fica permanentemente encoberto, sem posição
-  // de scroll que o revele). 3 <table> lado a lado, cada uma só do tamanho
-  // que precisa, não tem esse problema.
-  if(cfg.cols.some(c=>c.band)) return renderSplitTable(cfg);
   const table=document.getElementById(cfg.id); if(!table) return;
   table.classList.toggle('dt-center', !!cfg.center);   // Mar01: dados centralizados
   const fit=!!cfg.fit;                                  // fit: cabe 100% da largura, sem scroll
@@ -184,7 +172,8 @@ function renderTable(cfg){
   let tfoot='';
   if(cfg.total){ tfoot='<tfoot><tr>'+cfg.cols.map((c,i)=>{
     const v=cfg.total[c.key]; const isFirst=i===0&&v==null;
-    return `<td class="${c.type==='dim'?'dim':''}${stkCls(c)}" title="${isFirst?'Total Geral':esc(fmtStd(c.type,v))}">${isFirst?'Total Geral':fmt(c.type,v)}</td>`;
+    const tc=c.cls?c.cls({cells:cfg.total}):'';   // ex.: Lucro negativo em vermelho também no total
+    return `<td class="${c.type==='dim'?'dim':''}${tc?' '+tc:''}${stkCls(c)}" title="${isFirst?'Total Geral':esc(fmtStd(c.type,v))}">${isFirst?'Total Geral':fmt(c.type,v)}</td>`;
   }).join('')+'</tr></tfoot>'; }
   table.style.width=fit?'100%':totalW+'px';
   table.innerHTML=colgroup+thead+tbody+tfoot;
@@ -229,183 +218,10 @@ function renderTable(cfg){
   // pra chips/cores customizados nunca sumirem ao clicar num cabeçalho)
   if(cfg.afterRender) cfg.afterRender(table, rows);
 }
-/* ---------------- tabela "split" (colunas travadas em banda) ----------------
-   3 <table> independentes lado a lado (esquerda fixa · meio com scroll
-   próprio · direita fixa). Cada seção rola VERTICALMENTE por conta própria
-   (max-height igual ao do .tbl-wrap ancestral + overflow-y:auto — ver CSS
-   .dt-split-fixed/.dt-split-scroll) e um listener de 'scroll' sincroniza as
-   3 (scrollTop) pra se comportarem como uma tabela só. Isso evita as 2
-   armadilhas de quando isso era 1 única faixa por posição:
-   1) cabeçalho "solto": se só o miolo tem overflow-x:auto, o CSS força
-      overflow-y a virar "auto" nele também (canonicalização do spec) —
-      mas como o miolo nunca chega a rolar de fato sozinho (cresce até
-      caber o conteúdo), ele vira um scroll container que nunca se move,
-      e o sticky do thead gruda relativo A ELE, não ao .tbl-wrap que
-      realmente rola — daí o cabeçalho "sobe" junto com o resto ao rolar.
-   2) banda cobrindo o miolo: position:sticky por célula numa única
-      <table> não sobra espaço pro miolo quando (banda esquerda + banda
-      direita) > largura do card — o miolo fica permanentemente atrás das
-      bandas, sem posição de scroll que o revele.
-   Cada seção rolando por si (bounded, overflow-y:auto de verdade) faz o
-   sticky nativo funcionar sem ressalva nenhuma, e cada uma só ocupa o
-   espaço que ela mesma precisa — cabendo tudo, o flex nem mostra barra de
-   rolagem e fica idêntico a uma tabela única. */
-function renderSplitTable(cfg){
-  const root=document.getElementById(cfg.id); if(!root) return;
-  const wrap=root.closest('.tbl-wrap');
-  const sortState=STATE.sort[cfg.id];
-  let rows=cfg.rows.slice();
-  if(sortState){ const {key,dir}=sortState; const c=cfg.cols.find(x=>x.key===key);
-    rows.sort((a,b)=>{ let va=a.cells[key], vb=b.cells[key];
-      if(c && (c.type==='dim'||c.type==='date')){ va=norm(va); vb=norm(vb); return dir==='asc'?(va<vb?-1:va>vb?1:0):(va>vb?-1:va<vb?1:0); }
-      va=(va==null||!isFinite(va))?-Infinity:va; vb=(vb==null||!isFinite(vb))?-Infinity:vb;
-      return dir==='asc'?va-vb:vb-va; }); }
-  const ext={};
-  cfg.cols.forEach(c=>{ if(c.heat){ const vs=rows.map(r=>r.cells[c.key]).filter(v=>v!=null&&isFinite(v)); ext[c.key]=[Math.min(...vs),Math.max(...vs)]; }});
-  const fmt=(t,v)=> t==='roas'?roasf(v):t==='brl'?brl(v):t==='pct'?pct(v):t==='int'?intf(v):t==='num'?numf(v):t==='date'?brdate(v):t==='html'?(v==null?'-':String(v)):escHtml(dimf(v));
-  const esc=s=>String(s==null?'':s).replace(/"/g,'&quot;');
-  const leftCols=cfg.cols.filter(c=>c.band==='l'), rightCols=cfg.cols.filter(c=>c.band==='r'), midCols=cfg.cols.filter(c=>!c.band);
-  function section(cols){
-    const widths=cols.map(c=>colWidth(cfg,c)); const totalW=widths.reduce((a,b)=>a+b,0);
-    const colgroup='<colgroup>'+cols.map((c,i)=>`<col style="width:${widths[i]}px">`).join('')+'</colgroup>';
-    const thead='<thead><tr>'+cols.map(c=>{
-      const sc = sortState&&sortState.key===c.key ? (sortState.dir==='asc'?'sorted-asc':'sorted-desc') : '';
-      return `<th class="${c.type==='dim'?'dim ':''}${sc}" data-k="${c.key}" title="${esc(c.label)}">${c.label}<span class="rsz"></span></th>`;
-    }).join('')+'</tr></thead>';
-    const tbody='<tbody>'+rows.map(r=>{
-      const sel = cfg.selectable && cfg.selSet && cfg.selSet.has(r.k);
-      const tds=cols.map(c=>{
-        const v=r.cells[c.key]; let bg='';
-        if(c.heat && ext[c.key]) bg=`background:${heat(v,ext[c.key][0],ext[c.key][1],c.heat)}`;
-        const cls=(c.type==='dim'?'dim':'')+(c.cls&&c.cls(r)?' '+c.cls(r):'');
-        const ttl=c.type==='html'?'':` title="${esc(fmtStd(c.type,v))}"`;
-        return `<td class="${cls}" style="${bg}"${ttl}>${fmt(c.type,v)}</td>`;
-      }).join('');
-      return `<tr class="${sel?'sel':''}" data-k="${encodeURIComponent(r.k)}">${tds}</tr>`;
-    }).join('')+'</tbody>';
-    let tfoot='';
-    if(cfg.total){ tfoot='<tfoot><tr>'+cols.map(c=>{
-      const v=cfg.total[c.key]; const isFirst=cfg.cols.indexOf(c)===0&&v==null;
-      return `<td class="${c.type==='dim'?'dim':''}" title="${isFirst?'Total Geral':esc(fmtStd(c.type,v))}">${isFirst?'Total Geral':fmt(c.type,v)}</td>`;
-    }).join('')+'</tr></tfoot>'; }
-    return `<table class="dt${cfg.center?' dt-center':''}" style="width:${totalW}px">${colgroup}${thead}${tbody}${tfoot}</table>`;
-  }
-  // altura de cada seção = a mesma altura máxima do .tbl-wrap ancestral
-  // (tbl-normal/tbl-double/inline) — rolam juntas dentro do mesmo limite
-  // visual de sempre, sem precisar que o .tbl-wrap role por fora.
-  const maxH=wrap?parseFloat(getComputedStyle(wrap).maxHeight):NaN;
-  const hStyle=isFinite(maxH)?` style="max-height:${maxH}px"`:'';
-  // troca a própria tag por <div> (um <table> não pode ter <div> como filho —
-  // o parser HTML descarta; outerHTML recria o nó com a tag certa). Funciona
-  // tanto na 1ª renderização (raiz ainda é a <table> do template) quanto nas
-  // seguintes (raiz já é a <div class="dt-split"> da renderização anterior).
-  root.outerHTML =
-    `<div id="${cfg.id}" class="dt-split">`+
-      `<div class="dt-split-fixed dt-split-l"${hStyle}>${section(leftCols)}</div>`+
-      `<div class="dt-split-scroll"${hStyle}>${section(midCols)}</div>`+
-      `<div class="dt-split-fixed dt-split-r"${hStyle}>${section(rightCols)}</div>`+
-    `</div>`;
-  const fresh=document.getElementById(cfg.id);
-  // A seção do meio é a única com barra de rolagem HORIZONTAL; essa barra come
-  // altura do scrollport dela (clientHeight menor). Se as seções fixas ficarem
-  // com o mesmo max-height, o rodapé sticky ("Total Geral") delas fica ~7px mais
-  // baixo que o do meio e o scroll vertical delas anda um pouco mais — as linhas
-  // saem de sincronia (o "degrau"). Descontamos a altura da barra das seções
-  // fixas p/ os 3 scrollports terem exatamente a mesma altura útil.
-  (function alignScrollports(){
-    const mid=fresh.querySelector('.dt-split-scroll'); if(!mid) return;
-    const sb=mid.offsetHeight-mid.clientHeight;   // altura da barra horizontal (0 se não houver)
-    if(!(sb>0) || !isFinite(maxH)) return;
-    fresh.querySelectorAll('.dt-split-fixed').forEach(el=>{ el.style.maxHeight=(maxH-sb)+'px'; });
-  })();
-  // hover sincronizado: passar o mouse em QUALQUER seção (esquerda/meio/direita)
-  // acende a linha correspondente (mesmo índice) nas 3 — senão o :hover nativo
-  // só pega a seção sob o cursor, e visualmente parece que só um pedaço da
-  // linha "existe" (ver CSS .dt-split table.dt tbody tr:hover desativado).
-  const bodyRows=['.dt-split-l','.dt-split-scroll','.dt-split-r'].map(sel=>{
-    const t=fresh.querySelector(sel+' table.dt'); return t?[...t.querySelectorAll('tbody tr')]:[];
-  });
-  // trava de segurança do alinhamento: mesmo com a altura fixa do CSS, qualquer
-  // diferença de fração de pixel entre as seções (fonte diferente por SO, zoom
-  // do navegador) acumularia linha a linha e viraria "degrau". Aqui a altura
-  // REAL de cada linha é medida nas 3 seções e a maior (arredondada p/ cima,
-  // em pixel inteiro) é aplicada às 3 — as bordas ficam sempre na mesma altura.
-  (function lockRowHeights(){
-    const secs=bodyRows.filter(a=>a.length);
-    if(secs.length<2) return;
-    const n=Math.min(...secs.map(a=>a.length));
-    const hs=[]; for(let i=0;i<n;i++) hs.push(Math.ceil(Math.max(...secs.map(a=>a[i].getBoundingClientRect().height))));
-    for(let i=0;i<n;i++) secs.forEach(a=>{ a[i].style.height=hs[i]+'px'; });
-    // mesma trava p/ cabeçalho e rodapé (se um for 1px mais alto, TODAS as
-    // linhas daquela seção descem junto e a tabela inteira sai de sincronia)
-    ['thead tr','tfoot tr'].forEach(sel=>{
-      const els=[...fresh.querySelectorAll('.dt-split-l '+sel+', .dt-split-scroll '+sel+', .dt-split-r '+sel)]
-        .filter(tr=>tr.children.length);
-      if(els.length<2) return;
-      const h=Math.ceil(Math.max(...els.map(tr=>tr.getBoundingClientRect().height)));
-      els.forEach(tr=>{ tr.style.height=h+'px'; });
-    });
-  })();
-  rows.forEach((r,i)=>{
-    const trio=bodyRows.map(trs=>trs[i]).filter(Boolean);
-    trio.forEach(tr=>{
-      tr.addEventListener('mouseenter',()=>trio.forEach(t=>t.classList.add('hover-row')));
-      tr.addEventListener('mouseleave',()=>trio.forEach(t=>t.classList.remove('hover-row')));
-    });
-  });
-  // as 3 seções rolam verticalmente cada uma por conta própria (CSS acima) —
-  // sincroniza scrollTop entre elas pra se comportarem como 1 tabela só,
-  // não importa sobre qual seção o mouse rolou.
-  const secs=[...fresh.querySelectorAll('.dt-split-l, .dt-split-scroll, .dt-split-r')];
-  let syncing=false;
-  secs.forEach(el=>el.addEventListener('scroll',()=>{
-    if(syncing) return; syncing=true;
-    secs.forEach(o=>{ if(o!==el) o.scrollTop=el.scrollTop; });
-    requestAnimationFrame(()=>{ syncing=false; });
-  }));
-  // sort: clicar em QUALQUER cabeçalho (das 3 tabelas) reordena as 3 juntas
-  fresh.querySelectorAll('thead th').forEach(th=>{
-    th.addEventListener('click',e=>{ if(e.target.classList.contains('rsz'))return;
-      const k=th.dataset.k, cur=STATE.sort[cfg.id];
-      if(!cur||cur.key!==k) STATE.sort[cfg.id]={key:k,dir:'asc'};
-      else if(cur.dir==='asc') STATE.sort[cfg.id]={key:k,dir:'desc'};
-      else delete STATE.sort[cfg.id];
-      renderSplitTable(cfg);
-    });
-  });
-  // resize: cada coluna só afeta a largura da SUA seção (as 3 tabelas são
-  // independentes, então redimensionar ao vivo não desalinha nada)
-  fresh.querySelectorAll('thead th .rsz').forEach(g=>{
-    g.addEventListener('mousedown',e=>{ e.preventDefault(); e.stopPropagation();
-      const th=g.parentElement, k=th.dataset.k, x0=e.clientX;
-      const sectionTable=th.closest('table'), ths=[...th.parentElement.children];
-      const ci=ths.indexOf(th), col=sectionTable.querySelector('colgroup').children[ci];
-      const w0=col.offsetWidth, tw0=sectionTable.offsetWidth;
-      document.body.style.userSelect='none';
-      const mv=ev=>{ const nw=Math.max(60,w0+(ev.clientX-x0)); col.style.width=nw+'px'; sectionTable.style.width=(tw0-w0+nw)+'px';
-        STATE.colw[cfg.id]=STATE.colw[cfg.id]||{}; STATE.colw[cfg.id][k]=nw; };
-      const up=()=>{ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); document.body.style.userSelect=''; localStorage.setItem('dm_colw',JSON.stringify(STATE.colw)); };
-      document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
-    });
-    g.addEventListener('dblclick',e=>{ e.preventDefault(); e.stopPropagation();
-      const th=g.parentElement, k=th.dataset.k, c=cfg.cols.find(x=>x.key===k);
-      const nw=autoColWidth(cfg,c);
-      STATE.colw[cfg.id]=STATE.colw[cfg.id]||{}; STATE.colw[cfg.id][k]=nw;
-      localStorage.setItem('dm_colw',JSON.stringify(STATE.colw));
-      renderSplitTable(cfg);
-    });
-  });
-  if(cfg.selectable && cfg.onSelect){
-    fresh.querySelectorAll('tbody tr').forEach(tr=>{
-      tr.addEventListener('click',e=>{ cfg.onSelect(decodeURIComponent(tr.dataset.k), e); });
-    });
-  }
-  if(cfg.afterRender) cfg.afterRender(fresh, rows);
-}
 /* Heatmap por coluna: cor FIXA por métrica (definida em identidade-visual.css),
    só a OPACIDADE varia com o valor (maior valor = mais vibrante).
-   Gasto=vermelho · Checkouts=azul · Hook=ciano · Vendas=verde · ROAS=amarelo. */
-const HEAT_HUE={gasto:'--heat-gasto', ck:'--heat-ck', hook:'--heat-hook', vendas:'--heat-vendas', roas:'--heat-roas'};
+   Gasto=vermelho · Checkouts=azul · Connect Rate=ciano · Vendas=verde · ROAS=amarelo. */
+const HEAT_HUE={gasto:'--heat-gasto', ck:'--heat-ck', connect:'--heat-connect', vendas:'--heat-vendas', roas:'--heat-roas'};
 function heat(v,lo,hi,kind){
   if(v==null||!isFinite(v)||hi===lo||!HEAT_HUE[kind]) return 'transparent';
   const t=Math.max(0,Math.min(1,(v-lo)/(hi-lo)));
@@ -422,30 +238,34 @@ function toggleSet(set,key,ctrl,others){
 function funnelHTML(steps){ return steps.map(s=>`
     <div class="step ${s[3]?'na':''} ${s[4]||''}"><div class="step-main"><div class="m-label">${s[0]}</div><div class="m-val">${s[1]}</div></div>
     <div class="secs">${s[2].map(x=>`<div><span class="s-label">${x[0]}</span><span class="s-val">${x[1]}</span></div>`).join('')}</div></div>`).join(''); }
-/* etapas do funil de vendas — iguais na Visão Geral, na Captura e no Relatório */
+/* etapas do funil — a Visão Geral e o Relatório mostram todas; o Tráfego vai
+   até as Vendas. Sem as colunas de tráfego na planilha (tem_trafego=false), as
+   etapas de clique no link e visualização ficam apagadas. */
 function funnelSteps(t){
-  const dv=derive(t);
+  const dv=derive(t), semTrafego=B.tem_trafego===false;
   return [
     ['Gasto Total', brl(dv.gasto), [], false, 'hl-gasto'],
-    ['Impressões', intf(t.im), [['CPM',brl(dv.cpm)],['Hook Rate',pct(dv.hook)]]],
-    ['Alcance', intf(t.rc), [['Frequência',numf(dv.freq)]]],
+    ['Impressões', intf(t.im), [['CPM',brl(dv.cpm)]]],
     ['Cliques', intf(t.cl), [['CTR',pct(dv.ctr)],['CPC',brl(dv.cpc)]]],
-    ['Checkouts', intf(t.ck), [['Custo/Checkout',brl(dv.cpck)],['Clique→Checkout',pct(dv.convck)]]],
+    ['Cliques no link', intf(t.lc), [['CTR do link',pct(dv.ctrl)],['Custo/clique',brl(dv.cpcl)]], semTrafego],
+    ['Visualizações da página', intf(t.lpv), [['Connect Rate',pct(dv.connect)],['Custo/visualização',brl(dv.cplpv)]], semTrafego],
+    ['Checkouts', intf(t.ck), [['Custo/Checkout',brl(dv.cpck)],['Página→Checkout',pct(dv.lpvck)]]],
     ['Vendas', intf(t.vd), [['CPA',brl(dv.cpa)],['Checkout→Venda',pct(dv.ckv)]], false, 'hl-venda'],
-    ['Faturamento', brl(t.fat), [['ROAS',roasf(dv.roas)],['Ticket médio',brl(dv.ticket)]], false, 'hl-fat'],
+    ['Faturamento bruto', brl(t.fb), [['ROAS',roasf(dv.roas)],['Ticket médio',brl(dv.ticket)]], false, 'hl-fat'],
+    ['Faturamento líquido', brl(t.fl), [['ROAS líquido',roasf(dv.roasl)],['Taxas da venda',pct(dv.taxa)]]],
+    ['Lucro Real', brl(dv.lucro), [['ROI',pct(dv.roi)],['Margem',pct(dv.margem)]], false, dv.lucro<0?'hl-gasto':'hl-venda'],
   ];
 }
+const lucroCls=v=>(v==null||!isFinite(v)||Math.abs(v)<0.005)?'':(v<0?'neg':'pos');
 
 /* ---------------- charts ---------------- */
 const charts={};
 const cvar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const hx2rgb=h=>{h=(h||'').replace('#','').trim();if(h.length===3)h=h.split('').map(c=>c+c).join('');const n=parseInt(h||'888888',16);return [(n>>16)&255,(n>>8)&255,n&255];};
-const CHART_SERIES=['--cc1','--cc2','--cc3','--cc4','--cc5','--cc6','--cc7','--cc8','--cc9','--cc10'];
-const chartPalette=()=>CHART_SERIES.map(v=>cvar(v)||'#888888');
 const cmuted=()=>cvar('--muted')||'#6B7280', cink=()=>cvar('--ink')||'#1A1D2E', cgrid=()=>cvar('--grid')||'#EEF0F5';
 function destroy(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
-/* aviso "sem dados" sobre o canvas (ex.: nenhum anúncio vendeu no período) —
-   sem ele o card fica com um eixo vazio e parece que quebrou. */
+/* aviso "sem dados" sobre o canvas (ex.: nenhuma venda no período) — sem ele o
+   card fica com um eixo vazio e parece que quebrou. */
 function chartEmpty(id, empty, msg){
   const el=document.getElementById(id); if(!el) return;
   const box=el.parentElement; let n=box.querySelector('.chart-empty');
@@ -453,6 +273,9 @@ function chartEmpty(id, empty, msg){
   if(!n){ n=document.createElement('div'); n.className='chart-empty'; box.appendChild(n); }
   n.textContent=msg||'Sem dados no período';
 }
+const legendOpts=()=>({labels:{color:cink(),boxWidth:10,usePointStyle:true,font:{size:11}}});
+const dayTitle=d=>brdate(d)+' · '+weekday(d);
+/* Evolução diária: Checkouts e Vendas (barras) · Gasto e Faturamento bruto (linhas) */
 function comboChart(id, d){
   destroy(id); const el=document.getElementById(id); if(!el) return;
   chartEmpty(id, !d.length, 'Sem dados no período');
@@ -463,38 +286,73 @@ function comboChart(id, d){
       {type:'bar',label:'Checkouts',data:d.map(x=>x.ck),backgroundColor:cCk,yAxisID:'y',borderRadius:3,order:4},
       {type:'bar',label:'Vendas',data:d.map(x=>x.vd),backgroundColor:cVd,yAxisID:'y',borderRadius:3,order:3},
       {type:'line',label:'Gasto',data:d.map(x=>+(x.sp*taxf()).toFixed(2)),borderColor:cGasto,backgroundColor:cGasto,yAxisID:'y1',borderWidth:2,pointRadius:2,tension:.25,order:1},
-      {type:'line',label:'Faturamento',data:d.map(x=>+x.fat.toFixed(2)),borderColor:cFat,backgroundColor:cFat,yAxisID:'y1',borderWidth:2,pointRadius:2,tension:.25,order:0},
+      {type:'line',label:'Faturamento bruto',data:d.map(x=>+x.fb.toFixed(2)),borderColor:cFat,backgroundColor:cFat,yAxisID:'y1',borderWidth:2,pointRadius:2,tension:.25,order:0},
     ]},
     options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
-      plugins:{legend:{labels:{color:cink(),boxWidth:10,usePointStyle:true,font:{size:11}}},
-        tooltip:{callbacks:{label:c=>{const v=c.raw; return c.dataset.label+': '+(c.dataset.yAxisID==='y1'?brl(v):intf(v));}}}},
+      plugins:{legend:legendOpts(),
+        tooltip:{callbacks:{title:c=>c.length?dayTitle(d[c[0].dataIndex].d):'',label:c=>{const v=c.raw; return c.dataset.label+': '+(c.dataset.yAxisID==='y1'?brl(v):intf(v));}}}},
       scales:{x:{ticks:{color:mut,font:{size:10}},grid:{display:false}},
         y:{position:'left',ticks:{color:mut,font:{size:10},precision:0},grid:{color:gr},beginAtZero:true,title:{display:true,text:'Checkouts · Vendas',color:mut,font:{size:10}}},
         y1:{position:'right',ticks:{color:mut,font:{size:10}},grid:{display:false},beginAtZero:true,title:{display:true,text:'R$',color:mut,font:{size:10}}}}}
   });
 }
-function hbar(id, items, valFn, colorFn, top, unit){
+/* Lucro Real por dia (líquido − gasto com imposto): barra verde = lucro ·
+   vermelha = prejuízo. Dias sem gasto e sem faturamento ficam de fora. */
+function lucroChart(id, d){
   destroy(id); const el=document.getElementById(id); if(!el) return;
-  unit=unit||'vendas';
-  let arr=items.filter(x=>valFn(x)>0).sort((a,b)=>valFn(b)-valFn(a)); if(top) arr=arr.slice(0,top);
-  chartEmpty(id, !arr.length, 'Nenhum anúncio com '+unit+' no período');
-  const mut=cmuted();
-  charts[id]=new Chart(el,{type:'bar', plugins:[barLabels],
-    data:{labels:arr.map(x=>barLbl(x.label)), datasets:[{label:unit,data:arr.map(valFn),backgroundColor:arr.map(colorFn||(()=>cvar('--chart-vendas'))),borderRadius:3}]},
-    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,layout:{padding:{right:28}},
-      plugins:{legend:{display:false},tooltip:{callbacks:{title:c=>arr[c[0].dataIndex].label,label:c=>intf(c.raw)+' '+unit}}},
-      scales:{x:{beginAtZero:true,ticks:{color:mut,precision:0,font:{size:10}},grid:{color:cgrid()}},
-              y:{ticks:{color:mut,font:{size:10}},grid:{display:false}}}}});
+  const rows=d.filter(x=>x.sp>0||x.fl>0);
+  chartEmpty(id, !rows.length, 'Sem gasto nem faturamento no período');
+  const vals=rows.map(x=>+(x.fl-x.sp*taxf()).toFixed(2));
+  const good=cvar('--good'), bad=cvar('--bad'), mut=cmuted();
+  charts[id]=new Chart(el,{type:'bar',
+    data:{labels:rows.map(x=>x.d.slice(5)), datasets:[{label:'Lucro',data:vals,backgroundColor:vals.map(v=>v>=0?good:bad),borderRadius:3}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{title:c=>c.length?dayTitle(rows[c[0].dataIndex].d):'',label:c=>'Lucro: '+brl(c.raw)}}},
+      scales:{x:{ticks:{color:mut,font:{size:9}},grid:{display:false}},
+        y:{ticks:{color:mut,font:{size:9},callback:v=>'R$'+nf0.format(v)},grid:{color:cgrid()}}}}});
 }
-const barLabels={id:'barLabels',afterDatasetsDraw(ch){const{ctx}=ch;ctx.save();ctx.font='600 11px Segoe UI,system-ui';ctx.fillStyle=cmuted();ctx.textBaseline='middle';
-  ch.getDatasetMeta(0).data.forEach((el,i)=>{const v=ch.data.datasets[0].data[i]; if(!v)return; ctx.fillText(intf(v),el.x+5,el.y);});ctx.restore();}};
-/* barras de TAXA (Hook Rate por anúncio): recebe a lista já ordenada, rotula em % */
+/* Retorno acumulado no período: gasto (com imposto) × faturamento líquido. Onde
+   a linha verde passa a vermelha, o período empatou. */
+function acumChart(id, d){
+  destroy(id); const el=document.getElementById(id); if(!el) return;
+  chartEmpty(id, !d.length, 'Sem dados no período');
+  let cg=0, cf=0; const G=[], F=[];
+  d.forEach(x=>{ cg+=x.sp*taxf(); cf+=x.fl; G.push(+cg.toFixed(2)); F.push(+cf.toFixed(2)); });
+  const mut=cmuted(), cG=cvar('--chart-gasto'), cF=cvar('--good');
+  charts[id]=new Chart(el,{type:'line',
+    data:{labels:d.map(x=>x.d.slice(5)), datasets:[
+      {label:'Gasto acumulado',data:G,borderColor:cG,backgroundColor:cG,borderWidth:2,pointRadius:1.5,tension:.2},
+      {label:'Fat. líquido acumulado',data:F,borderColor:cF,backgroundColor:cF,borderWidth:2,pointRadius:1.5,tension:.2}]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+      plugins:{legend:{labels:{color:cink(),boxWidth:8,usePointStyle:true,font:{size:10}}},
+        tooltip:{callbacks:{title:c=>c.length?dayTitle(d[c[0].dataIndex].d):'',label:c=>c.dataset.label+': '+brl(c.raw),
+          footer:c=>c.length?'Lucro acumulado: '+brl(F[c[0].dataIndex]-G[c[0].dataIndex]):''}}},
+      scales:{x:{ticks:{color:mut,font:{size:9}},grid:{display:false}},
+        y:{beginAtZero:true,ticks:{color:mut,font:{size:9},callback:v=>'R$'+nf0.format(v)},grid:{color:cgrid()}}}}});
+}
+/* Checkouts e vendas somados por dia da semana (segunda a domingo) */
+function weekdayChart(id, d){
+  destroy(id); const el=document.getElementById(id); if(!el) return;
+  const ORDER=[1,2,3,4,5,6,0], ck=Array(7).fill(0), vd=Array(7).fill(0);
+  d.forEach(x=>{ const w=new Date(x.d+'T00:00:00').getDay(); ck[w]+=x.ck; vd[w]+=x.vd; });
+  chartEmpty(id, !ck.some(Boolean)&&!vd.some(Boolean), 'Nenhum checkout no período');
+  const mut=cmuted();
+  charts[id]=new Chart(el,{type:'bar',
+    data:{labels:ORDER.map(i=>WD[i]), datasets:[
+      {label:'Checkouts',data:ORDER.map(i=>ck[i]),backgroundColor:cvar('--chart-ck'),borderRadius:3},
+      {label:'Vendas',data:ORDER.map(i=>vd[i]),backgroundColor:cvar('--chart-vendas'),borderRadius:3}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:cink(),boxWidth:8,usePointStyle:true,font:{size:10}}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+intf(c.raw)}}},
+      scales:{x:{ticks:{color:mut,font:{size:10}},grid:{display:false}},
+        y:{beginAtZero:true,ticks:{color:mut,font:{size:9},precision:0},grid:{color:cgrid()}}}}});
+}
+/* barras de TAXA: recebe a lista na ordem do funil e rotula em % */
 function hbarPct(id, arr, color, emptyMsg){
   destroy(id); const el=document.getElementById(id); if(!el) return;
   chartEmpty(id, !arr.length, emptyMsg);
   const mut=cmuted();
   charts[id]=new Chart(el,{type:'bar', plugins:[barLabelsPct],
-    data:{labels:arr.map(x=>barLbl(x.label)), datasets:[{label:'%',data:arr.map(x=>x.v),backgroundColor:color||cvar('--chart-hook'),borderRadius:3}]},
+    data:{labels:arr.map(x=>x.label), datasets:[{label:'%',data:arr.map(x=>x.v),backgroundColor:color||cvar('--chart-connect'),borderRadius:3}]},
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,layout:{padding:{right:52}},
       plugins:{legend:{display:false},tooltip:{callbacks:{title:c=>arr[c[0].dataIndex].label,label:c=>pct(c.raw)+(arr[c.dataIndex]&&arr[c.dataIndex].aux?' · '+arr[c.dataIndex].aux:'')}}},
       scales:{x:{beginAtZero:true,ticks:{color:mut,font:{size:10},callback:v=>nf0.format(v*100)+'%'},grid:{color:cgrid()}},
@@ -502,9 +360,55 @@ function hbarPct(id, arr, color, emptyMsg){
 }
 const barLabelsPct={id:'barLabelsPct',afterDatasetsDraw(ch){const{ctx}=ch;ctx.save();ctx.font='600 11px Segoe UI,system-ui';ctx.fillStyle=cmuted();ctx.textBaseline='middle';
   ch.getDatasetMeta(0).data.forEach((el,i)=>{const v=ch.data.datasets[0].data[i]; if(v==null)return; ctx.fillText(pct(v),el.x+5,el.y);});ctx.restore();}};
-
+/* taxas de conversão do funil no período, etapa a etapa */
+function convChart(id, t){
+  const dv=derive(t);
+  const arr=[
+    {label:'Connect Rate', v:dv.connect, aux:intf(t.lpv)+' visualizações de '+intf(t.lc)+' cliques no link'},
+    {label:'Página → Checkout', v:dv.lpvck, aux:intf(t.ck)+' checkouts de '+intf(t.lpv)+' visualizações'},
+    {label:'Checkout → Venda', v:dv.ckv, aux:intf(t.vd)+' vendas de '+intf(t.ck)+' checkouts'},
+    {label:'Página → Venda', v:dv.convpag, aux:intf(t.vd)+' vendas de '+intf(t.lpv)+' visualizações'},
+  ].filter(x=>x.v!=null&&isFinite(x.v));
+  hbarPct(id, arr, cvar('--chart-connect'), 'Sem visitas à página no período');
+}
+/* Tráfego diário: cliques no link e visualizações (barras) · custo por
+   visualização (linha, R$) */
+function trafficCombo(id, d){
+  destroy(id); const el=document.getElementById(id); if(!el) return;
+  chartEmpty(id, !d.length, 'Sem dados no período');
+  const mut=cmuted(), gr=cgrid(), cLc=cvar('--chart-lc'), cLpv=cvar('--chart-lpv'), cCusto=cvar('--chart-cpa');
+  charts[id]=new Chart(el,{
+    data:{labels:d.map(x=>x.d.slice(5)), datasets:[
+      {type:'bar',label:'Cliques no link',data:d.map(x=>x.lc),backgroundColor:cLc,yAxisID:'y',borderRadius:3,order:3},
+      {type:'bar',label:'Visualizações',data:d.map(x=>x.lpv),backgroundColor:cLpv,yAxisID:'y',borderRadius:3,order:2},
+      {type:'line',label:'Custo por visualização',data:d.map(x=>x.lpv?+(x.sp*taxf()/x.lpv).toFixed(2):null),borderColor:cCusto,backgroundColor:cCusto,yAxisID:'y1',borderWidth:2,pointRadius:2,tension:.25,spanGaps:true,order:0},
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+      plugins:{legend:legendOpts(),
+        tooltip:{callbacks:{title:c=>c.length?dayTitle(d[c[0].dataIndex].d):'',label:c=>c.dataset.label+': '+(c.dataset.yAxisID==='y1'?brl(c.raw):intf(c.raw))}}},
+      scales:{x:{ticks:{color:mut,font:{size:10}},grid:{display:false}},
+        y:{position:'left',ticks:{color:mut,font:{size:10},precision:0},grid:{color:gr},beginAtZero:true,title:{display:true,text:'Cliques · Visualizações',color:mut,font:{size:10}}},
+        y1:{position:'right',ticks:{color:mut,font:{size:10}},grid:{display:false},beginAtZero:true,title:{display:true,text:'R$',color:mut,font:{size:10}}}}}
+  });
+}
+/* linhas diárias de uma ou mais taxas (Connect Rate, custos por etapa) */
+function lineDaily(id, d, series, fmt, axis, emptyMsg){
+  destroy(id); const el=document.getElementById(id); if(!el) return;
+  const dsets=series.map(s=>({label:s.label,
+    data:d.map(x=>{ const v=s.fn(x); return (v==null||!isFinite(v))?null:+v.toFixed(4); }),
+    borderColor:s.color, backgroundColor:s.color, borderWidth:2, pointRadius:2, tension:.25, spanGaps:true}));
+  chartEmpty(id, !dsets.some(ds=>ds.data.some(v=>v!=null)), emptyMsg);
+  const mut=cmuted();
+  charts[id]=new Chart(el,{type:'line',
+    data:{labels:d.map(x=>x.d.slice(5)), datasets:dsets},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+      plugins:{legend:series.length>1?legendOpts():{display:false},
+        tooltip:{callbacks:{title:c=>c.length?dayTitle(d[c[0].dataIndex].d):'',label:c=>c.dataset.label+': '+fmt(c.raw)}}},
+      scales:{x:{ticks:{color:mut,font:{size:9}},grid:{display:false}},
+        y:{beginAtZero:true,ticks:{color:mut,font:{size:9},callback:axis},grid:{color:cgrid()}}}}});
+}
 /* Donut de conversão (checkout → venda): verde = checkout que virou venda ·
-   cinza = abandonou. É a etapa mais funda do funil que existe por anúncio. */
+   cinza = abandonou. */
 function donutCkVenda(id, vd, ck){
   destroy(id); const el=document.getElementById(id); if(!el) return;
   chartEmpty(id, !ck, 'Nenhum checkout no período');
@@ -516,191 +420,126 @@ function donutCkVenda(id, vd, ck){
       plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.label+': '+intf(c.raw)+(ck?' ('+pct(c.raw/ck)+')':'')}}}}});
   const el2=document.getElementById('mConvPct'); if(el2) el2.textContent=pct(ck?vd/ck:null);
 }
-/* Métrica por dimensão (campanha/conjunto/anúncio) por dia — 1 linha por membro.
-   A métrica é escolhida nos botões acima dos gráficos (STATE.dimMetric): Gasto,
-   CTR, Hook Rate ou CPA. Venda é rara (poucas por dia), então um gráfico só de
-   CPA ficaria quase vazio; por isso o padrão é o Gasto.
-   Legenda é um painel HTML próprio (fora do canvas) — a legenda NATIVA do Chart.js
-   quebra/trunca nomes longos porque respeita a largura do canvas; a nossa não.
-   Clique numa linha da legenda OU numa linha do gráfico filtra a tabela (selDim);
-   quando a tabela já tem seleção (STATE.mSel*), o gráfico plota SÓ as linhas
-   selecionadas (a legenda continua listando todas p/ dar pra trocar a seleção). */
-const DIM_METRICS={
-  gasto:{label:'Gasto',     fn:d=>d.gasto, fmt:brl, axis:v=>'R$'+nf0.format(v), suf:'de gasto'},
-  ctr:  {label:'CTR',       fn:d=>d.ctr,   fmt:pct, axis:v=>nf1.format(v*100)+'%', suf:'CTR'},
-  hook: {label:'Hook Rate', fn:d=>d.hook,  fmt:pct, axis:v=>nf0.format(v*100)+'%', suf:'Hook Rate'},
-  cpa:  {label:'CPA',       fn:d=>d.cpa,   fmt:brl, axis:v=>'R$'+nf0.format(v), suf:'por venda'},
-};
-function dimChart(id, fM, agg, dim, selSet){
-  destroy(id); const el=document.getElementById(id); const legEl=document.getElementById(id+'Legend');
-  if(!el) return;
-  const M=DIM_METRICS[STATE.dimMetric]||DIM_METRICS.gasto;
-  const days=[...new Set(fM.filter(r=>r.d).map(r=>r.d))].sort();
-  // membros com gasto, do maior para o menor gasto — ordem estável p/ cor e legenda
-  const members=Object.keys(agg).filter(k=>agg[k].sp>0).sort((a,b)=>agg[b].sp-agg[a].sp);
-  const pal=chartPalette(), mut=cmuted();
-  const dimChar={'camp':'C','adset':'A','ad':'D'}[dim]||'C';
-  const plotMembers = (selSet&&selSet.size) ? members.filter(m=>selSet.has(m)) : members;
-  const dsets=plotMembers.map(mv=>{
-    const idx=members.indexOf(mv);
-    const byDay={}; days.forEach(d=>{byDay[d]=zeroAgg();});
-    fM.forEach(r=>{ if(r[dim]===mv && r.d!=null && byDay[r.d]) addTo(byDay[r.d],r); });
-    const data=days.map(d=>{ const v=M.fn(derive(byDay[d])); return (v==null||!isFinite(v))?null:+v.toFixed(4); });
-    const col=pal[idx%pal.length];
-    return {label:String(mv), data, borderColor:col, backgroundColor:col, borderWidth:2, pointRadius:2, tension:.25, spanGaps:true};
-  });
-  chartEmpty(id, !dsets.some(ds=>ds.data.some(v=>v!=null&&v!==0)), 'Sem '+M.label+' no período');
-  charts[id]=new Chart(el,{type:'line',
-    data:{labels:days.map(d=>d.slice(5)), datasets:dsets},
-    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'nearest',intersect:false},
-      onClick:(e,act)=>{ if(act.length){ const idx=act[0].datasetIndex;
-        if(idx!=null&&dsets[idx]) selDim(dimChar,dsets[idx].label,false); } },
-      plugins:{
-        legend:{display:false},
-        tooltip:{displayColors:true,
-          callbacks:{title:()=>'', label:c=>[c.dataset.label, M.fmt(c.raw)+' '+M.suf]}}
-      },
-      scales:{x:{ticks:{color:mut,font:{size:9}},grid:{display:false}},
-        y:{ticks:{color:mut,font:{size:9},callback:M.axis},grid:{color:cgrid()},beginAtZero:true}}
-    }
-  });
-  if(legEl){
-    legEl.innerHTML = members.map((mv,idx)=>{
-      const col=pal[idx%pal.length];
-      const v = agg[mv]!=null ? M.fn(derive(agg[mv])) : null;
-      const sel = !!(selSet && selSet.has(mv));
-      return `<div class="cl-row${sel?' sel':''}" data-mv="${escHtml(mv)}" title="${escHtml(mv)}">`
-        +`<span class="cl-swatch" style="background:${col}"></span>`
-        +`<span class="cl-name">${escHtml(mv)}</span>`
-        +`<span class="cl-val">${M.fmt(v)}</span></div>`;
-    }).join('');
-    legEl.querySelectorAll('.cl-row').forEach(row=>{
-      row.addEventListener('click',()=>selDim(dimChar,row.dataset.mv,false));
-    });
-  }
-}
-/* botões de métrica dos gráficos da hierarquia (um conjunto acima de cada gráfico,
-   todos ligados ao mesmo STATE.dimMetric) */
-function renderDimMetricBtns(){
-  document.querySelectorAll('.dm-switch').forEach(host=>{
-    host.innerHTML=Object.entries(DIM_METRICS).map(([k,m])=>
-      `<button type="button" class="dm-btn${STATE.dimMetric===k?' active':''}" data-m="${k}">${m.label}</button>`).join('');
-    host.querySelectorAll('.dm-btn').forEach(b=>b.addEventListener('click',()=>{ STATE.dimMetric=b.dataset.m; renderAll(); }));
-  });
-}
 
 /* ---------------- KPI cards ---------------- */
-function kpiCard(k){ return `<div class="kpi ${k.hero?'hero':''}"><div class="kl"><span>${k.label}</span>${k.pill?`<span class="pill q">${k.pill}</span>`:''}</div><div class="kv">${k.val}</div><div class="ka">${k.aux||''}</div></div>`; }
+function kpiCard(k){ return `<div class="kpi ${k.hero?'hero':''}"><div class="kl"><span>${k.label}</span>${k.pill?`<span class="pill q">${k.pill}</span>`:''}</div><div class="kv ${k.tone||''}">${k.val}</div><div class="ka">${k.aux||''}</div></div>`; }
+
+/* ---------------- tabelas diárias ---------------- */
+/* Visão Geral / Relatório: o resultado do dia. Cabe na largura do card (fit),
+   por isso o tráfego fica na tabela da página Tráfego. */
+const DAILY_COLS=[
+  {key:'date',label:'Data',type:'date',w:86},{key:'wd',label:'Dia',type:'dim',w:46},
+  {key:'gasto',label:'Gasto',type:'brl',heat:'gasto',w:92},
+  {key:'lpv',label:'Visualiz.',type:'int'},
+  {key:'ck',label:'Checkouts',type:'int',heat:'ck',w:84},{key:'vd',label:'Vendas',type:'int',heat:'vendas'},
+  {key:'cpa',label:'CPA',type:'brl'},{key:'fb',label:'Fat. bruto',type:'brl',w:92},
+  {key:'fl',label:'Fat. líq.',type:'brl',w:92},
+  {key:'lucro',label:'Lucro',type:'brl',w:96,cls:r=>lucroCls(r.cells.lucro)},
+  {key:'roas',label:'ROAS',type:'roas',heat:'roas'},
+];
+/* Tráfego Meta Ads: do gasto ao checkout */
+const TRAFFIC_COLS=[
+  {key:'date',label:'Data',type:'date',w:86},{key:'wd',label:'Dia',type:'dim',w:46},
+  {key:'gasto',label:'Gasto',type:'brl',heat:'gasto',w:92},
+  {key:'im',label:'Impr.',type:'int'},{key:'cpm',label:'CPM',type:'brl'},
+  {key:'cl',label:'Cliques',type:'int'},{key:'ctr',label:'CTR',type:'pct'},
+  {key:'lc',label:'Cliq. link',type:'int'},{key:'lpv',label:'Visualiz.',type:'int'},
+  {key:'connect',label:'Connect',type:'pct',heat:'connect'},{key:'cplpv',label:'Custo/Vis.',type:'brl'},
+  {key:'ck',label:'Checkouts',type:'int',heat:'ck',w:84},
+];
+function dayCells(x,d,isTotal){
+  return {date:isTotal?null:x.d, wd:isTotal?'':weekday(x.d),
+    gasto:d.gasto, im:x.im, cpm:d.cpm, cl:x.cl, ctr:d.ctr, lc:x.lc, lpv:x.lpv, connect:d.connect, cplpv:d.cplpv,
+    ck:x.ck, vd:x.vd, cpa:d.cpa, fb:x.fb, fl:x.fl, lucro:d.lucro, roas:d.roas};
+}
+/* tabela diária: lista o período inteiro do seletor (último dia no topo); os
+   dias clicados ficam destacados e são o que o resto da página mostra */
+function renderDailyTable(id, cols){
+  const fR=rangeActive(), tR=totals(fR);
+  const dl=daily(fR).reverse();
+  renderTable({id, cols, center:true, fit:true,
+    rows:dl.map(x=>({k:x.d, cells:dayCells(x,derive(x))})),
+    total:dayCells({...tR,d:null},derive(tR),true),
+    selectable:true, selSet:STATE.selDays,
+    onSelect:(k,e)=>{ toggleSet(STATE.selDays,k,e&&(e.ctrlKey||e.metaKey)); syncDateInputs(); renderAll(); },
+  });
+}
 
 /* ---------------- PAGE 1: Visão Geral ---------------- */
 /* IDs dos elementos por página — a Visão Geral e o Relatório compartilham o
    MESMO corpo (renderGeralCore), só mudam os alvos no DOM. */
-const GERAL_IDS={funnel:'geralFunnel',kpis2:'geralKpis2',combo:'gCombo',vdad:'gVdAd',ckad:'gCkAd',hookad:'gHookAd',cpaad:'gCpaAd',daily:'gDaily'};
-const REL_IDS  ={funnel:'relFunnel', kpis2:'relKpis2', combo:'rCombo',vdad:'rVdAd',ckad:'rCkAd',hookad:'rHookAd',cpaad:'rCpaAd',daily:'rDaily'};
-/* Hook Rate só é comparável entre anúncios com impressões suficientes — um
-   anúncio com 20 impressões e 10 views de 3s teria "50%" e lideraria o ranking. */
-const HOOK_MIN_IMPR=300;
-const adShort=x=>{ x=String(x||'—'); return x.length>24?x.slice(0,23)+'…':x; };
-/* rótulo do eixo das barras horizontais: mais curto, senão o Chart.js corta o
-   começo do nome; o nome inteiro aparece no tooltip */
-const barLbl=x=>{ x=String(x||'—'); return x.length>18?x.slice(0,17)+'…':x; };
+const GERAL_IDS={funnel:'geralFunnel',kpis2:'geralKpis2',combo:'gCombo',lucro:'gLucro',acum:'gAcum',wd:'gWd',conv:'gConv',daily:'gDaily'};
+const REL_IDS  ={funnel:'relFunnel', kpis2:'relKpis2', combo:'rCombo',lucro:'rLucro',acum:'rAcum',wd:'rWd',conv:'rConv',daily:'rDaily'};
 function renderGeral(){ renderGeralCore(GERAL_IDS); }
 function renderGeralCore(ids){
-  const fM=metaActive();
+  const fM=finActive();
   const t=totals(fM), dv=derive(t), g=dv.gasto;
   document.getElementById(ids.funnel).innerHTML=funnelHTML(funnelSteps(t));
 
   // ---- métricas secundárias (não repetem o funil) ----
   const dd=daily(fM), nDays=periodDays();
-  const adAgg=buildAgg(fM,'ad');
-  let topAd=null, bestAd=null, bestHook=null, nAdsAtivos=0;
-  Object.entries(adAgg).forEach(([ad,a])=>{
-    if(a.sp>0) nAdsAtivos++;
-    if(a.vd>0 && (topAd==null||a.vd>topAd.m||(a.vd===topAd.m&&a.fat>topAd.f))) topAd={ad,m:a.vd,f:a.fat};
-    if(a.vd>0){ const c=(a.sp*taxf())/a.vd; if(bestAd==null||c<bestAd.v) bestAd={ad,v:c}; }
-    if(a.im>=HOOK_MIN_IMPR){ const h=a.v3/a.im; if(bestHook==null||h>bestHook.v) bestHook={ad,v:h}; }
-  });
-  const nCampAtivas=Object.values(buildAgg(fM,'camp')).filter(a=>a.sp>0).length;
-  const nAdsetsAtivos=Object.values(buildAgg(fM,'adset')).filter(a=>a.sp>0).length;
-  const comVenda=dd.filter(x=>x.vd>0);
-  const melhorDia=comVenda.length?comVenda.reduce((a,b)=>(b.vd>a.vd||(b.vd===a.vd&&b.fat>a.fat))?b:a):null;
+  const lucroDia=x=>x.fl-x.sp*taxf();
+  const ativos=dd.filter(x=>x.sp>0||x.fl>0);           // dias com gasto ou faturamento
+  const diasGasto=dd.filter(x=>x.sp>0).length, diasVenda=dd.filter(x=>x.vd>0).length;
+  const diasLucro=ativos.filter(x=>lucroDia(x)>0).length, diasPrej=ativos.filter(x=>lucroDia(x)<0).length;
+  const melhor=ativos.length?ativos.reduce((a,b)=>lucroDia(b)>lucroDia(a)?b:a):null;
+  const pior=ativos.length?ativos.reduce((a,b)=>lucroDia(b)<lucroDia(a)?b:a):null;
+  // ROAS bruto em que o lucro zera: líquido = gasto  =>  bruto ÷ gasto = bruto ÷ líquido
+  const roasEq=t.fl>0?t.fb/t.fl:null;
   const k2=[
     {label:'Vendas por dia (média)',val:numf(t.vd/nDays),aux:brl(g/nDays)+' de gasto/dia'},
-    {label:'Melhor CPA (anúncio)',val:bestAd?brl(bestAd.v):'-',aux:bestAd?escHtml(adShort(bestAd.ad)):'nenhuma venda no período'},
-    {label:'Top anúncio (vendas)',val:topAd?intf(topAd.m):'-',aux:topAd?escHtml(adShort(topAd.ad)):'nenhuma venda no período'},
-    {label:'Melhor Hook Rate (anúncio)',val:bestHook?pct(bestHook.v):'-',aux:bestHook?escHtml(adShort(bestHook.ad)):'mín. '+intf(HOOK_MIN_IMPR)+' impressões'},
-    {label:'Anúncios com gasto',val:intf(nAdsAtivos),aux:intf(nAdsetsAtivos)+' conjuntos · '+intf(nCampAtivas)+' campanhas'},
-    {label:'Melhor dia (vendas)',val:melhorDia?intf(melhorDia.vd):'-',aux:melhorDia?brdate(melhorDia.d)+' · '+brl(melhorDia.fat):'—'},
-    {label:'Retenção do vídeo 25%→50%',val:pct(dv.r2550),aux:'25%→100%: '+pct(dv.compl)},
-    {label:'Conversão (Vendas/Cliques)',val:pct(dv.conv),aux:t.vd?numf(t.cl/t.vd)+' cliques por venda':'—'},
+    {label:'Lucro por dia (média)',val:brl(dv.lucro/nDays),tone:lucroCls(dv.lucro),aux:brl(t.fl/nDays)+' de faturamento líquido/dia'},
+    {label:'Dias com venda',val:intf(diasVenda),aux:'de '+intf(diasGasto)+' dia'+(diasGasto===1?'':'s')+' com gasto'},
+    {label:'Dias no lucro',val:intf(diasLucro),aux:intf(diasPrej)+' no prejuízo'},
+    {label:'Melhor dia (lucro)',val:melhor?brl(lucroDia(melhor)):'-',tone:melhor?lucroCls(lucroDia(melhor)):'',aux:melhor?brdate(melhor.d)+' · '+intf(melhor.vd)+' venda'+(melhor.vd===1?'':'s'):'—'},
+    {label:'Pior dia (lucro)',val:pior?brl(lucroDia(pior)):'-',tone:pior?lucroCls(lucroDia(pior)):'',aux:pior?brdate(pior.d)+' · '+intf(pior.vd)+' venda'+(pior.vd===1?'':'s'):'—'},
+    {label:'ROAS de equilíbrio',val:roasf(roasEq),aux:roasEq!=null?'ROAS bruto p/ lucro zero · atual '+roasf(dv.roas):'nenhuma venda no período'},
+    {label:'Conversão da página (Vendas/Visualiz.)',val:pct(dv.convpag),aux:t.vd?numf(t.lpv/t.vd)+' visualizações por venda':'—'},
   ];
   document.getElementById(ids.kpis2).innerHTML=k2.map(kpiCard).join('');
+
   comboChart(ids.combo, dd);
+  lucroChart(ids.lucro, dd);
+  acumChart(ids.acum, dd);
+  weekdayChart(ids.wd, dd);
+  convChart(ids.conv, t);
 
-  const items=Object.entries(adAgg).map(([label,a])=>({label,a}));
-  // vendas por anúncio (top 10)
-  hbar(ids.vdad, items, x=>x.a.vd, ()=>cvar('--chart-vendas'), 10, 'vendas');
-  // checkouts por anúncio (top 10)
-  hbar(ids.ckad, items, x=>x.a.ck, ()=>cvar('--chart-ck'), 10, 'checkouts');
-  // Hook Rate por anúncio (top 10, com impressões mínimas)
-  const hookArr=items.filter(x=>x.a.im>=HOOK_MIN_IMPR&&x.a.v3>0)
-    .map(x=>({label:x.label, v:x.a.v3/x.a.im, aux:intf(x.a.im)+' impressões'}))
-    .sort((a,b)=>b.v-a.v).slice(0,10);
-  hbarPct(ids.hookad, hookArr, cvar('--chart-hook'), 'Nenhum anúncio com '+intf(HOOK_MIN_IMPR)+'+ impressões');
-  // CPA por anúncio (top 10 mais baratos) — barra menor = melhor, por isso ordenamos asc
-  const cpaAd=items.filter(x=>x.a.vd>0&&x.a.sp>0)
-    .map(x=>({label:x.label, v:(x.a.sp*taxf())/x.a.vd}))
-    .sort((a,b)=>a.v-b.v).slice(0,10);
-  hbarAsc(ids.cpaad, cpaAd);
+  renderDailyTable(ids.daily, DAILY_COLS);
+}
 
-  // tabela diaria, ultimo dia no topo + heatmap. Lista o período inteiro; os dias
-  // clicados ficam destacados (e são o que o funil acima mostra)
-  const fR=rangeActive(), tR=totals(fR);
-  const dl=daily(fR).reverse();
-  renderTable({id:ids.daily, cols:DAILY_COLS, center:true, fit:true,
-    rows:dl.map(x=>{const d=derive(x); return {k:x.d, cells:dailyCells(x,d)};}),
-    total:dailyCells({...tR,d:null},derive(tR),true),
-    selectable:true, selSet:STATE.selDays,
-    onSelect:(k,e)=>{ toggleSet(STATE.selDays,k,e&&(e.ctrlKey||e.metaKey)); syncDateInputs(); renderAll(); },
-  });
+/* ---------------- PAGE 2: Tráfego Meta Ads ---------------- */
+function renderMeta(){
+  const fM=finActive();
+  const t=totals(fM), dd=daily(fM);
+  document.getElementById('metaFunnel').innerHTML=funnelHTML(funnelSteps(t).slice(0,7));
+  trafficCombo('mCombo', dd);
+  lineDaily('mConnect', dd, [{label:'Connect Rate',fn:x=>derive(x).connect,color:cvar('--chart-connect')}],
+    pct, v=>nf0.format(v*100)+'%', 'Sem cliques no link no período');
+  lineDaily('mCustos', dd, [
+      {label:'Custo por clique no link',fn:x=>derive(x).cpcl,color:cvar('--chart-lc')},
+      {label:'Custo por visualização',fn:x=>derive(x).cplpv,color:cvar('--chart-cpa')}],
+    brl, v=>'R$'+nf1.format(v), 'Sem tráfego no período');
+  donutCkVenda('mConvDonut', t.vd, t.ck);
+  renderDailyTable('tDaily', TRAFFIC_COLS);
 }
-/* barras de CUSTO (menor = melhor): mantém a ordem recebida e rotula em R$ */
-function hbarAsc(id, arr){
-  destroy(id); const el=document.getElementById(id); if(!el) return;
-  chartEmpty(id, !arr.length, 'Nenhuma venda no período');
-  const mut=cmuted();
-  charts[id]=new Chart(el,{type:'bar', plugins:[barLabelsBrl],
-    data:{labels:arr.map(x=>barLbl(x.label)), datasets:[{label:'CPA',data:arr.map(x=>x.v),backgroundColor:cvar('--chart-cpa')||cvar('--chart-vendas'),borderRadius:3}]},
-    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,layout:{padding:{right:62}},
-      plugins:{legend:{display:false},tooltip:{callbacks:{title:c=>arr[c[0].dataIndex].label,label:c=>brl(c.raw)+' por venda'}}},
-      scales:{x:{beginAtZero:true,ticks:{color:mut,font:{size:10},callback:v=>'R$'+nf0.format(v)},grid:{color:cgrid()}},
-              y:{ticks:{color:mut,font:{size:10}},grid:{display:false}}}}});
-}
-const barLabelsBrl={id:'barLabelsBrl',afterDatasetsDraw(ch){const{ctx}=ch;ctx.save();ctx.font='600 11px Segoe UI,system-ui';ctx.fillStyle=cmuted();ctx.textBaseline='middle';
-  ch.getDatasetMeta(0).data.forEach((el,i)=>{const v=ch.data.datasets[0].data[i]; if(!v)return; ctx.fillText(brl(v),el.x+5,el.y);});ctx.restore();}};
+
 /* ---------------- PAGE 3: Relatório ----------------
    Espelha a Visão Geral (renderGeralCore com IDs próprios) e, abaixo, acrescenta
-   o painel de Metas e a tabela de Anúncios. */
-const SAMPLE_MIN_SPEND = (B.sample_min_spend!=null?B.sample_min_spend:100);
-const SAMPLE_MIN_VENDAS = (B.sample_min_vendas!=null?B.sample_min_vendas:2);
-const escHtml=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-
-/* ---- Metas & parâmetros (painel editável) — ajusta cores/amostra AO VIVO ----
+   o painel de Metas e o resumo por semana. */
+/* ---- Metas & parâmetros (painel editável) — recolore o resumo AO VIVO ----
    Defaults vêm do build.py; o usuário edita no painel (persistido em
-   localStorage 'dm_metas') e a tabela de anúncios recolore CPA/ROAS e reavalia
-   a amostra na hora. Meta null = "não definida" (métrica fica sem cor). */
+   localStorage 'dm_metas') e a tabela semanal recolore CPA/ROAS e reavalia a
+   amostra na hora. Meta null = "não definida" (métrica fica sem cor). */
 const METAS_DEFAULT = {
   cpa:   (B.meta_cpa!=null?B.meta_cpa:null),
   roas:  (B.meta_roas!=null?B.meta_roas:null),
-  volMin:(B.volume_min_amostral!=null?B.volume_min_amostral:SAMPLE_MIN_VENDAS),
-  nDias: (B.n_dias_corte!=null?B.n_dias_corte:5),
+  volMin:(B.volume_min_amostral!=null?B.volume_min_amostral:2),
 };
 function loadMetas(){
   let saved={}; try{ saved=JSON.parse(localStorage.getItem('dm_metas')||'{}'); }catch(e){}
   const m={...METAS_DEFAULT};
   ['cpa','roas'].forEach(k=>{ if(saved[k]!=null&&isFinite(saved[k])) m[k]=saved[k]; else if(k in saved && saved[k]===null) m[k]=null; });
   if(saved.volMin!=null&&isFinite(saved.volMin)&&saved.volMin>=1) m.volMin=saved.volMin;
-  if(saved.nDias!=null&&isFinite(saved.nDias)&&saved.nDias>=1) m.nDias=saved.nDias;
   return m;
 }
 const METAS = loadMetas();
@@ -721,73 +560,38 @@ function metaColorClassHigh(v, meta){
   if(v>=meta*0.7) return 'mc-yellow';
   return 'mc-red';
 }
-
-/* ad -> (campanha, conjunto) dominantes por gasto. Um anúncio pode rodar em mais
-   de uma campanha/conjunto; fica com a combinação de maior gasto. */
-function adStructMap(fM){
-  const acc={};
-  fM.forEach(r=>{ const byCamp=acc[r.ad]=acc[r.ad]||{};
-    const byAdset=byCamp[r.camp]=byCamp[r.camp]||{};
-    byAdset[r.adset]=(byAdset[r.adset]||0)+r.sp; });
-  const out={};
-  Object.entries(acc).forEach(([ad,byCamp])=>{
-    let best=null;
-    Object.entries(byCamp).forEach(([camp,byAdset])=>{
-      Object.entries(byAdset).forEach(([adset,sp])=>{
-        if(!best||sp>best.sp) best={camp,adset,sp};
-      });
-    });
-    out[ad]={camp:best.camp,adset:best.adset};
-  });
-  return out;
-}
-/* amostra relevante para JULGAR o anúncio (senão: "Em observação"). O limiar de
-   vendas vem do painel de metas (volume mínimo amostral), editável ao vivo. O
-   gasto comparado é o mesmo que a tabela mostra (com imposto, se ligado). */
-function adSampleOk(a){ return a.sp*taxf()>=SAMPLE_MIN_SPEND && a.vd>=METAS.volMin; }
-/* O resultado mais profundo desta conta é a VENDA: mais vendas primeiro; no
-   empate, menor CPA; depois mais checkouts, menor custo/checkout e mais gasto
-   (anúncio sem venda ainda é ordenado pelo sinal mais próximo dela). */
-function cmpBest(a,b){                       // <0 => a antes (melhor)
-  if(a.vd!==b.vd) return b.vd-a.vd;
-  const da=derive(a), db=derive(b);
-  const ca=da.cpa==null?Infinity:da.cpa, cb=db.cpa==null?Infinity:db.cpa;
-  if(ca!==cb) return ca-cb;
-  if(a.ck!==b.ck) return b.ck-a.ck;
-  const ka=da.cpck==null?Infinity:da.cpck, kb=db.cpck==null?Infinity:db.cpck;
-  if(ka!==kb) return ka-kb;
-  return b.sp-a.sp; }
-
-/* Colunas da tabela de anúncios. Anúncio fica FIXO à esquerda (position:sticky
-   em .rel-adt), então dá pra ver sem rolar lateralmente — só as métricas do
-   meio rolam. */
-function adRowCells(ad,a,struct){
-  const d=derive(a);
-  return {ad, camp:struct.camp, adset:struct.adset,
-    gasto:d.gasto, im:a.im, cpm:d.cpm, hook:d.hook, ctr:d.ctr, cpc:d.cpc,
-    cl:a.cl, ck:a.ck, cpck:d.cpck, vd:a.vd, cpa:d.cpa, fat:a.fat, roas:d.roas,
-    status:null};
-}
 const statusChip=obs=>obs?'<span class="rel-chip c-yellow">Em observação</span>':'<span class="rel-chip c-green">Avaliável</span>';
-function relRenderAdTable(id,list){
-  const el=document.getElementById(id); if(!el) return;
+/* Resumo por semana (segunda a domingo) do período. A aba Financeiro não tem
+   quebra por anúncio, então é aqui que o gestor compara a evolução com as
+   metas. Semana com menos vendas que o volume mínimo fica "Em observação". */
+function renderRelWeeks(){
+  const fM=finActive();
+  const wk={};
+  fM.forEach(r=>{ const k=weekStart(r.d);
+    const w=wk[k]||(wk[k]={ini:k,dias:0,first:r.d,last:r.d,...zeroAgg()});
+    addTo(w,r); w.dias++; if(r.d<w.first) w.first=r.d; if(r.d>w.last) w.last=r.d; });
+  const list=Object.values(wk).sort((a,b)=>a.ini<b.ini?1:-1);   // semana mais recente no topo
+  const ddmm=d=>brdate(d).slice(0,5);
+  const cellsOf=(w,d)=>({ini:w.ini, per:ddmm(w.first)+(w.first===w.last?'':' a '+ddmm(w.last)),
+    status:'', dias:w.dias, gasto:d.gasto, lc:w.lc, lpv:w.lpv, connect:d.connect, ck:w.ck, vd:w.vd,
+    cpa:d.cpa, fb:w.fb, fl:w.fl, lucro:d.lucro, roas:d.roas});
+  const rows=list.map(w=>{ const d=derive(w), obs=w.vd<METAS.volMin, cells=cellsOf(w,d);
+    cells.status=obs?'Em observação':'Avaliável';   // texto p/ ordenar; o chip entra via afterRender
+    return {k:w.ini, cells, _obs:obs, _cpa:d.cpa, _roas:d.roas}; });
+  const tt=totals(fM), td=derive(tt);
+  const total={...cellsOf({ini:null,first:'',last:'',dias:fM.length,...tt},td), ini:null, per:'', status:''};
   const cols=[
-    {key:'ad',label:'Anúncio',type:'dim',big:true,stk:'l1'},{key:'status',label:'Status',type:'dim',w:140},
-    {key:'camp',label:'Campanha',type:'dim',big:true},{key:'adset',label:'Conjunto',type:'dim',big:true},
-    {key:'gasto',label:'Gasto',type:'brl'},{key:'im',label:'Impr.',type:'int'},
-    {key:'cpm',label:'CPM',type:'brl'},{key:'hook',label:'Hook',type:'pct'},{key:'ctr',label:'CTR',type:'pct'},
-    {key:'cpc',label:'CPC',type:'brl'},{key:'cl',label:'Cliques',type:'int'},
-    {key:'ck',label:'Checkouts',type:'int'},{key:'cpck',label:'Custo/Ck',type:'brl'},
-    {key:'vd',label:'Vendas',type:'int'},{key:'cpa',label:'CPA',type:'brl'},
-    {key:'fat',label:'Fat.',type:'brl'},{key:'roas',label:'ROAS',type:'roas'},
+    {key:'ini',label:'Semana',type:'date',w:96},{key:'per',label:'Dias com dado',type:'dim'},
+    {key:'status',label:'Status',type:'dim',w:140},{key:'dias',label:'Dias',type:'int',w:60},
+    {key:'gasto',label:'Gasto',type:'brl'},{key:'lc',label:'Cliq. link',type:'int'},
+    {key:'lpv',label:'Visualiz.',type:'int'},{key:'connect',label:'Connect',type:'pct'},
+    {key:'ck',label:'Checkouts',type:'int'},{key:'vd',label:'Vendas',type:'int'},
+    {key:'cpa',label:'CPA',type:'brl'},{key:'fb',label:'Fat. bruto',type:'brl'},
+    {key:'fl',label:'Fat. líq.',type:'brl'},
+    {key:'lucro',label:'Lucro',type:'brl',cls:r=>lucroCls(r.cells.lucro)},
+    {key:'roas',label:'ROAS',type:'roas'},
   ];
-  const rows=list.map(item=>{
-    const cells=adRowCells(item.ad,item.a,item.struct);
-    cells.status=item.obs?'Em observação':'Avaliável';  // texto p/ ordenar; o chip entra via afterRender
-    return {k:item.ad, cells, _obs:item.obs, _cpa:cells.cpa, _roas:cells.roas};
-  });
-  renderTable({
-    id, cols, rows, center:true,   // só as MÉTRICAS centralizam; dim fica à esquerda (CSS .dt-center)
+  renderTable({id:'relTop', cols, rows, total, center:true,
     // roda em TODA renderização (inclusive ao ordenar por um cabeçalho) — chip de
     // status e cor de meta (CPA/ROAS) nunca somem ao clicar pra ordenar
     afterRender:(table,sortedRows)=>{
@@ -804,26 +608,9 @@ function relRenderAdTable(id,list){
       });
     }
   });
-}
-
-/* Top Anúncios (separado p/ recolorir sem re-renderizar os gráficos quando o
-   usuário edita as metas). Mostra TODOS os anúncios com gasto (campeões com
-   amostra relevante primeiro, depois pela qualidade). Só os que têm amostra
-   relevante (adSampleOk) recebem "Avaliável"; o resto fica "Em observação". */
-function renderRelAds(){
-  const fM=metaActive();
-  const struct=adStructMap(fM);
-  const agg=buildAgg(fM,'ad');
-  const pool=Object.entries(agg).filter(([ad,a])=>a.sp>0).map(([ad,a])=>({ad, a, struct:struct[ad]||{camp:'—',adset:'—'}}));
-
-  const all=pool.slice().sort((x,y)=>{ const sx=adSampleOk(x.a), sy=adSampleOk(y.a);
-    if(sx!==sy) return sx?-1:1; return cmpBest(x.a,y.a); })
-    .map(it=>({...it, obs:!adSampleOk(it.a)}));
-  const champs=all.filter(it=>!it.obs).length;
-
-  relRenderAdTable('relTop',all);
+  const nAval=rows.filter(r=>!r._obs).length;
   document.getElementById('relTopCount').textContent =
-    champs+' '+(champs===1?'avaliável':'avaliáveis')+' de '+all.length+' anúncio'+(all.length===1?'':'s')+' com gasto';
+    list.length+' semana'+(list.length===1?'':'s')+' · '+nAval+' '+(nAval===1?'avaliável':'avaliáveis');
 }
 
 /* nota de referência do painel de metas (mostra as metas ativas + legenda de cor) */
@@ -831,13 +618,13 @@ function renderMetasNote(){
   const el=document.getElementById('relMetasNote'); if(!el) return;
   const cpa=METAS.cpa==null?'<b>não definida</b>':('<b>'+brl(METAS.cpa)+'</b>');
   const roas=METAS.roas==null?'<b>não definida</b>':('<b>'+roasf(METAS.roas)+'</b>');
-  el.innerHTML=`Referência ativa — Meta CPA: ${cpa} · Meta ROAS: ${roas} · Amostra mínima: <b>${intf(METAS.volMin)} venda${METAS.volMin===1?'':'s'}</b> e <b>${brl(SAMPLE_MIN_SPEND)}</b> de gasto · Referência de corte: <b>${intf(METAS.nDias)} dias</b> fora da meta (critério do gestor; a tabela não aplica sozinha). `
-    +((METAS.cpa==null&&METAS.roas==null)?'Preencha as metas para colorir CPA e ROAS na tabela de anúncios. ':'')
+  el.innerHTML=`Referência ativa — Meta CPA: ${cpa} · Meta ROAS: ${roas} · Semana avaliável a partir de <b>${intf(METAS.volMin)} venda${METAS.volMin===1?'':'s'}</b>. `
+    +((METAS.cpa==null&&METAS.roas==null)?'Preencha as metas para colorir CPA e ROAS no resumo semanal. ':'')
     +'Código de cor: <span class="mc-lg mc-green">verde = na meta</span> <span class="mc-lg mc-yellow">amarelo = até 30% fora</span> <span class="mc-lg mc-red">vermelho = além disso</span>.';
 }
 function syncMetasInputs(){
   const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.value=(v==null?'':v); };
-  set('metaCpa',METAS.cpa); set('metaRoas',METAS.roas); set('metaVolMin',METAS.volMin); set('metaNdias',METAS.nDias);
+  set('metaCpa',METAS.cpa); set('metaRoas',METAS.roas); set('metaVolMin',METAS.volMin);
   renderMetasNote();
 }
 
@@ -855,130 +642,7 @@ function renderRelatorio(){
   document.getElementById('relPeriodRange').textContent=rangeTxt;
 
   renderMetasNote();
-  renderRelAds();
-}
-
-/* colunas padrão das tabelas de heatmap por dia. Impressões e CPC ficam de fora
-   porque a tabela cabe na largura do card (fit) e com 14 colunas os valores em R$
-   cortavam; os dois estão no funil e nas tabelas da hierarquia. */
-const DAILY_COLS=[
-  {key:'date',label:'Data',type:'date',w:86},{key:'wd',label:'Dia',type:'dim',w:46},
-  {key:'gasto',label:'Gasto',type:'brl',heat:'gasto',w:92},
-  {key:'cpm',label:'CPM',type:'brl'},{key:'cl',label:'Cliques',type:'int'},{key:'ctr',label:'CTR',type:'pct'},
-  {key:'hook',label:'Hook',type:'pct',heat:'hook'},
-  {key:'ck',label:'Checkouts',type:'int',heat:'ck',w:84},{key:'vd',label:'Vendas',type:'int',heat:'vendas'},
-  {key:'cpa',label:'CPA',type:'brl'},{key:'fat',label:'Fat.',type:'brl',w:92},
-  {key:'roas',label:'ROAS',type:'roas',heat:'roas'},
-];
-function dailyCells(x,d,isTotal){
-  return {date:isTotal?null:x.d, wd:isTotal?'':weekday(x.d),
-    gasto:d.gasto, im:x.im, cpm:d.cpm, cl:x.cl, ctr:d.ctr, cpc:d.cpc, hook:d.hook,
-    ck:x.ck, vd:x.vd, cpa:d.cpa, fat:x.fat, roas:d.roas};
-}
-
-/* ---------------- PAGE 2: Captura Meta Ads ---------------- */
-/* recorte pelo filtro cruzado (campanha/conjunto/anúncio). ex = dimensão a NÃO
-   filtrar — cada tabela da hierarquia ignora a própria seleção para continuar
-   mostrando as linhas irmãs (multi-seleção com Ctrl). */
-function metaScope(ex, base){ let fM=base||metaActive();
-  if(ex!=='C'&&STATE.mSelC.size) fM=fM.filter(r=>STATE.mSelC.has(r.camp));
-  if(ex!=='A'&&STATE.mSelA.size) fM=fM.filter(r=>STATE.mSelA.has(r.adset));
-  if(ex!=='D'&&STATE.mSelAd.size) fM=fM.filter(r=>STATE.mSelAd.has(r.ad));
-  return fM; }
-/* selecao multipla: Ctrl adiciona (OR) sem sumir as demais linhas; clique simples troca a ancora */
-function selDim(dim,key,ctrl){
-  const sets={C:STATE.mSelC,A:STATE.mSelA,D:STATE.mSelAd}, s=sets[dim];
-  if(ctrl){ s.has(key)?s.delete(key):s.add(key); }
-  else { const sole=s.has(key)&&s.size===1&&!Object.entries(sets).some(([k2,x])=>k2!==dim&&x.size);
-    Object.values(sets).forEach(x=>x.clear()); if(!sole) s.add(key); }
-  // renderAll (e não renderMeta direto) para a barra de filtros ativos no topo
-  // acompanhar o clique.
-  renderAll();
-}
-function renderMeta(){
-  const fM=metaScope(null);   // KPIs, funil, graficos e tabela diaria
-  const t=totals(fM), dv=derive(t);
-  document.getElementById('metaFunnel').innerHTML=funnelHTML(funnelSteps(t));
-
-  comboChart('mCombo', daily(fM));
-  const adAggM=buildAgg(fM,'ad');
-  const items=Object.entries(adAggM).map(([label,a])=>({label,a}));
-  // barras de vendas por anúncio
-  hbar('mVdAd', items, x=>x.a.vd, ()=>cvar('--chart-vendas'), 10, 'vendas');
-  // donut de conversão (checkout -> venda)
-  donutCkVenda('mConvDonut', t.vd, t.ck);
-  // Compilado dos Anúncios — quem vendeu primeiro (menor CPA no topo), depois
-  // os demais pelo número de checkouts
-  const topRows=items.filter(x=>x.a.sp>0).map(({label,a})=>{const d=derive(a);
-    return {k:label, cells:{dim:label,gasto:d.gasto,ck:a.ck,vd:a.vd,cpa:d.cpa,roas:d.roas}, a};})
-    .sort((x,y)=>cmpBest(x.a,y.a)).slice(0,10);
-  // sem fit: largura automática por coluna + scroll horizontal dentro do card
-  renderTable({id:'mTopCpa', center:true,
-    cols:[{key:'dim',label:'Anúncios',type:'dim',big:true},
-      {key:'gasto',label:'Gasto',type:'brl'},
-      {key:'ck',label:'Checkouts',type:'int'},{key:'vd',label:'Vendas',type:'int'},
-      {key:'cpa',label:'CPA',type:'brl'},{key:'roas',label:'ROAS',type:'roas'}],
-    rows:topRows});
-
-  const fR=metaScope(null, rangeActive()), tR=totals(fR);   // período inteiro (ver renderGeralCore)
-  const dl=daily(fR).reverse();
-  renderTable({id:'tDaily', cols:DAILY_COLS, center:true, fit:true,
-    rows:dl.map(x=>{const d=derive(x); return {k:x.d, cells:dailyCells(x,d)};}),
-    total:dailyCells({...tR,d:null},derive(tR),true),
-    selectable:true, selSet:STATE.selDays,
-    onSelect:(k,e)=>{ toggleSet(STATE.selDays,k,e&&(e.ctrlKey||e.metaKey)); syncDateInputs(); renderAll(); },
-  });
-
-  // hierarquia — cada tabela vem do escopo que exclui a PRÓPRIA dimensão,
-  // então todas as linhas irmãs continuam visíveis para multi-seleção (Ctrl).
-  // band:'l' (dim+Gasto) fica grudado na borda esquerda; as demais colunas
-  // rolam horizontalmente juntas (band do meio).
-  const hcols=[
-    {key:'dim',label:'',type:'dim',big:true,band:'l'},{key:'gasto',label:'Gasto',type:'brl',band:'l'},
-    {key:'im',label:'Impr.',type:'int'},{key:'cpm',label:'CPM',type:'brl'},
-    {key:'rc',label:'Alcance',type:'int'},{key:'freq',label:'Freq.',type:'num'},
-    {key:'hook',label:'Hook',type:'pct'},
-    {key:'cl',label:'Cliques',type:'int'},{key:'ctr',label:'CTR',type:'pct'},{key:'cpc',label:'CPC',type:'brl'},
-    {key:'ck',label:'Checkouts',type:'int'},{key:'cpck',label:'Custo/Ck',type:'brl'},
-    {key:'vd',label:'Vendas',type:'int'},{key:'cpa',label:'CPA',type:'brl'},
-    {key:'fat',label:'Fat.',type:'brl'},{key:'roas',label:'ROAS',type:'roas'},
-  ];
-  const hcells=(k,a)=>{const d=derive(a);
-    return {dim:k,gasto:d.gasto,im:a.im,cpm:d.cpm,rc:a.rc,freq:d.freq,hook:d.hook,cl:a.cl,ctr:d.ctr,cpc:d.cpc,
-      ck:a.ck,cpck:d.cpck,vd:a.vd,cpa:d.cpa,fat:a.fat,roas:d.roas};};
-  function hierRows(map){ return Object.entries(map).map(([k,a])=>({k, cells:hcells(k,a)})); }
-  function totRowOf(tt){ return {...hcells(null,tt), dim:null}; }
-  const Sc=metaScope('C'), Sa=metaScope('A'), Sd=metaScope('D');
-  const aggC=buildAgg(Sc,'camp'), aggA=buildAgg(Sa,'adset'), aggD=buildAgg(Sd,'ad');
-  renderTable({id:'tCamp', cols:hcols.map((c,i)=>i===0?{...c,label:'Campanha'}:c), rows:hierRows(aggC), total:totRowOf(totals(Sc)),
-    selectable:true, selSet:STATE.mSelC, onSelect:(k,e)=>selDim('C',k,e&&(e.ctrlKey||e.metaKey))});
-  renderTable({id:'tAdset', cols:hcols.map((c,i)=>i===0?{...c,label:'Conjunto',big:true}:c), rows:hierRows(aggA), total:totRowOf(totals(Sa)),
-    selectable:true, selSet:STATE.mSelA, onSelect:(k,e)=>selDim('A',k,e&&(e.ctrlKey||e.metaKey))});
-  renderTable({id:'tAd', cols:hcols.map((c,i)=>i===0?{...c,label:'Anúncio'}:c), rows:hierRows(aggD), total:totRowOf(totals(Sd)),
-    selectable:true, selSet:STATE.mSelAd, onSelect:(k,e)=>selDim('D',k,e&&(e.ctrlKey||e.metaKey))});
-
-  // cada gráfico varia a dimensão da sua tabela — métrica escolhida nos botões,
-  // 1 linha por membro, legenda própria e filtro bidirecional com a tabela.
-  renderDimMetricBtns();
-  dimChart('chCamp', Sc, aggC, 'camp', STATE.mSelC);
-  dimChart('chAdset', Sa, aggA, 'adset', STATE.mSelA);
-  dimChart('chAd', Sd, aggD, 'ad', STATE.mSelAd);
-
-  // retenção do vídeo por criativo (é o que a aba Criativos tem de próprio)
-  const vRows=items.filter(x=>x.a.im>0).map(({label,a})=>{const d=derive(a);
-    return {k:label, cells:{ad:label,im:a.im,hook:d.hook,hold:d.hold,p25:a.p25,r2550:d.r2550,p100:a.p100,compl:d.compl,ctr:d.ctr,vd:a.vd}};})
-    .sort((x,y)=>y.cells.im-x.cells.im);
-  document.getElementById('qCount').textContent=vRows.length+' anúncio'+(vRows.length===1?'':'s');
-  const vt=derive(t);
-  renderTable({id:'tCriativos', center:true,
-    cols:[{key:'ad',label:'Anúncio',type:'dim',big:true},{key:'im',label:'Impr.',type:'int'},
-      {key:'hook',label:'Hook Rate',type:'pct'},
-      ...(TEM_HOLD?[{key:'hold',label:'Hold Rate',type:'pct'}]:[]),
-      {key:'p25',label:'Play 25%',type:'int'},{key:'r2550',label:'Ret. 25%→50%',type:'pct'},
-      {key:'p100',label:'Play 100%',type:'int'},{key:'compl',label:'Ret. 25%→100%',type:'pct'},
-      {key:'ctr',label:'CTR',type:'pct'},{key:'vd',label:'Vendas',type:'int'}],
-    rows:vRows,
-    total:{ad:null,im:t.im,hook:vt.hook,hold:vt.hold,p25:t.p25,r2550:vt.r2550,p100:t.p100,compl:vt.compl,ctr:vt.ctr,vd:t.vd}});
+  renderRelWeeks();
 }
 
 /* ---------------- date presets ---------------- */
@@ -1070,31 +734,24 @@ function ppApply(){
 }
 
 /* ---------------- navigation & boot ---------------- */
+const PAGE_TITLES={geral:'Visão Geral de Vendas', meta:'Tráfego Meta Ads', rel:'Relatório'};
 function setPage(p){ STATE.page=p;
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===p));
   document.getElementById('page-geral').classList.toggle('active',p==='geral');
   document.getElementById('page-meta').classList.toggle('active',p==='meta');
   document.getElementById('page-rel').classList.toggle('active',p==='rel');
-  document.getElementById('ptitle').textContent = p==='meta'?'Captura Meta Ads':(p==='rel'?'Relatório':'Visão Geral de Vendas');
+  document.getElementById('ptitle').textContent = PAGE_TITLES[p]||PAGE_TITLES.geral;
   document.getElementById('navToggle').checked=false;
   history.replaceState(null,'', p==='meta'?'#meta':(p==='rel'?'#rel':'#geral'));
   renderAll();
 }
 /* ---------------- barra de filtros ativos ----------------
-   Clicar numa linha de campanha/conjunto/anúncio filtra a página inteira,
-   inclusive o funil e a tabela diária, que ficam ACIMA das tabelas onde o
-   clique acontece. Sem um aviso fixo no topo dá para olhar o funil e achar que
-   é o total do período quando na verdade é o recorte de uma campanha — foi
-   exatamente o que aconteceu. Esta barra torna o filtro impossível de não ver e
-   dá como sair dele. */
+   Clicar numa data da tabela diária filtra a página inteira, inclusive o funil
+   que fica ACIMA da tabela. Sem um aviso fixo no topo dá para olhar o funil e
+   achar que é o total do período. Esta barra torna o filtro impossível de não
+   ver e dá como sair dele. */
 function activeFilters(){
   const out=[];
-  const lista=(set,rot,limpar)=>{ if(!set.size) return;
-    const v=[...set]; out.push({rot, txt: v.length===1?v[0]:v.length+' selecionados',
-      full:v.join(' · '), limpar}); };
-  lista(STATE.mSelC,'Campanha',()=>STATE.mSelC.clear());
-  lista(STATE.mSelA,'Conjunto',()=>STATE.mSelA.clear());
-  lista(STATE.mSelAd,'Anúncio',()=>STATE.mSelAd.clear());
   if(STATE.selDays.size){ const v=[...STATE.selDays].sort();
     out.push({rot:'Dias', txt: v.length===1?brdate(v[0]):v.length+' dias selecionados',
       full:v.map(brdate).join(' · '), limpar:()=>STATE.selDays.clear()}); }
@@ -1132,25 +789,24 @@ document.getElementById('ppCancel').addEventListener('click',ppClose);
 document.getElementById('periodPop').addEventListener('click',e=>e.stopPropagation());
 document.addEventListener('click',()=>{ if(ppIsOpen()) ppClose(); });
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&ppIsOpen()) ppClose(); });
-document.getElementById('clearBtn').addEventListener('click',()=>{ STATE.mSelC.clear();STATE.mSelA.clear();STATE.mSelAd.clear();STATE.selDays.clear(); applyPreset('mes'); });
+document.getElementById('clearBtn').addEventListener('click',()=>{ STATE.selDays.clear(); applyPreset('mes'); });
 document.getElementById('refreshBtn').addEventListener('click',function(){ this.classList.add('loading'); location.href=location.pathname+'?t='+Date.now()+location.hash; });
 
 /* painel de Metas & parâmetros — edita ao vivo, salva em localStorage e recolore
-   a tabela de anúncios (sem re-renderizar os gráficos) */
+   o resumo semanal (sem re-renderizar os gráficos) */
 (function wireMetas(){
   const num=el=>{ const s=(el&&el.value||'').trim(); if(s==='') return null; const n=parseFloat(s.replace(',','.')); return isFinite(n)?n:null; };
   const onEdit=()=>{
     METAS.cpa=num(document.getElementById('metaCpa'));
     METAS.roas=num(document.getElementById('metaRoas'));
     const vm=num(document.getElementById('metaVolMin')); METAS.volMin=(vm!=null&&vm>=1)?Math.round(vm):METAS_DEFAULT.volMin;
-    const nd=num(document.getElementById('metaNdias')); METAS.nDias=(nd!=null&&nd>=1)?Math.round(nd):METAS_DEFAULT.nDias;
     saveMetas(); renderMetasNote();
-    if(STATE.page==='rel') renderRelAds();   // só a tabela, sem mexer nos gráficos
+    if(STATE.page==='rel') renderRelWeeks();   // só a tabela, sem mexer nos gráficos
   };
-  ['metaCpa','metaRoas','metaVolMin','metaNdias'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('input',onEdit); });
+  ['metaCpa','metaRoas','metaVolMin'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('input',onEdit); });
   const rb=document.getElementById('relMetasReset');
   if(rb) rb.addEventListener('click',()=>{ Object.assign(METAS,METAS_DEFAULT);
-    try{ localStorage.removeItem('dm_metas'); }catch(e){} syncMetasInputs(); if(STATE.page==='rel') renderRelAds(); });
+    try{ localStorage.removeItem('dm_metas'); }catch(e){} syncMetasInputs(); if(STATE.page==='rel') renderRelWeeks(); });
   syncMetasInputs();
 })();
 
@@ -1164,4 +820,3 @@ window.addEventListener('hashchange',()=>{ const p=location.hash==='#meta'?'meta
 
 /* auto-refresh com cache-bust ~30 min */
 setTimeout(()=>{ location.href=location.pathname+'?t='+Date.now()+location.hash; }, 30*60*1000);
-

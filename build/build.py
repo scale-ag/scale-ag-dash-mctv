@@ -4,36 +4,37 @@
 Gera a dashboard estatica (index.html) do funil de VENDAS da MCTV a partir de
 UMA aba publica do Google Sheets (somente leitura):
 
-  - "MCTV | ACOMPANHAMENTO GERAL | LOOKER", aba "Criativos" (gid 1077415496):
-    uma linha por ANUNCIO x DIA, ja com campanha/conjunto e as metricas do
-    gerenciador (gasto, impressoes, alcance, CTR, CPC) + os eventos de venda
-    (Checkouts, Vendas, ROAS) + as metricas de video do criativo (Hook Rate,
-    Hold Rate, Play 25%, Retencao 25>50%, Play 100%).
+  - "MCTV | ACOMPANHAMENTO GERAL | LOOKER", aba "Financeiro": uma linha por DIA
+    com o investimento no Meta Ads, o faturamento (bruto e liquido), o lucro, as
+    vendas e checkouts e o trafego (cliques, CTR, cliques no link, visualizacoes
+    da pagina de destino).
 
-Esta aba ja e o cruzamento pronto (gerenciador + vendas por anuncio), entao
-NAO ha lista de leads nem casamento por nome: cada linha entra como esta.
+So esta aba e lida (pedido do gestor em 08/10/2026). A aba Criativos (anuncio x
+dia) NAO entra mais: a dash nao tem quebra por campanha/conjunto/anuncio nem
+metricas de video.
 
 FUNIL DESTA CONTA:
-    Gasto -> Impressoes -> Alcance -> Cliques -> Checkouts -> Vendas -> Faturamento
-com CPM · Frequencia · CTR · CPC · Custo/Checkout · CPA · ROAS · Ticket medio.
+    Gasto -> Impressoes -> Cliques -> Cliques no link -> Visualizacoes da pagina
+          -> Checkouts -> Vendas -> Faturamento bruto -> Faturamento liquido -> Lucro
+com CPM · CTR · CPC · Connect Rate · Custo/Checkout · CPA · ROAS · Ticket medio.
 
-Colunas derivadas (a planilha nao traz o numero pronto):
-  - Cliques: a coluna "Cliques no Link" vem VAZIA. O clique sai de Gasto/CPC
-    (ou de CTR x Impressoes quando o CPC e zero) — as duas contas batem.
-  - Faturamento: ROAS x Gasto (o ROAS da planilha e calculado sobre o gasto
-    SEM imposto). Na dash o ROAS e recalculado sobre o gasto COM imposto.
-  - Hook/Hold/Retencao: a planilha traz %; o build converte em CONTAGEM
-    (views de 3s = Hook% x Impressoes; Play 50% = Ret25>50% x Play 25%) para
-    que qualquer agregacao (periodo, campanha, anuncio) seja uma media
-    ponderada correta, e nao a media das porcentagens.
+Colunas derivadas (a planilha nao traz a contagem pronta):
+  - Impressoes = Cliques / CTR (o CTR da aba e Cliques / Impressoes em %). Bate
+    com as impressoes da aba Criativos do mesmo dia (ex.: 04/08: 64 / 6,63% = 965).
+  - ROAS, CPA, CPC, CTR, Connect Rate e Lucro sao RECALCULADOS no navegador a
+    partir das contagens (somar as taxas de cada dia daria um numero errado no
+    periodo, e o imposto precisa entrar no gasto). O "Lucro Real" da planilha e
+    Faturamento Liquido - Investimento SEM imposto; a dash usa o gasto COM
+    imposto quando o toggle esta ligado.
 
-NAO EXISTE NESTA CONTA: lista de leads, MQL/qualificacao e CAC por lead.
+NAO EXISTE NESTA FONTE: anuncio/campanha/conjunto, alcance, frequencia, video,
+lista de leads, MQL.
 
-Este script apenas LE a planilha (export CSV publico) e emite os REGISTROS
-BRUTOS (meta[]) dentro do HTML. Todos os filtros, agregacoes, KPIs, tabelas e
-graficos sao calculados no navegador (client-side). Nunca escreve nada de volta.
+Este script apenas LE a planilha (CSV publico) e emite os REGISTROS BRUTOS
+(fin[], um por dia) dentro do HTML. Todos os filtros, agregacoes, KPIs, tabelas
+e graficos sao calculados no navegador (client-side). Nunca escreve nada de volta.
 
-Teste local: --criativos-file apontando para um CSV baixado.
+Teste local: --financeiro-file apontando para um CSV baixado.
 """
 from __future__ import annotations
 
@@ -47,25 +48,22 @@ import sys
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-# Planilha "MCTV | ACOMPANHAMENTO GERAL | LOOKER", aba "Criativos".
+# Planilha "MCTV | ACOMPANHAMENTO GERAL | LOOKER", aba "Financeiro".
 SPREADSHEET_ID = "1X6XKBc65KVsfrFIoBHsk_rxC4iUrzu0l9VSYoaF6PHY"
-GID_CRIATIVOS = "1077415496"
-EXPORT_URL = "https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}"
-# Plano B: o export as vezes responde 401 mesmo com a planilha publica; o gviz
-# (headers=1 -> 1a linha vira cabecalho) le a mesma aba.
-GVIZ_URL = "https://docs.google.com/spreadsheets/d/{sid}/gviz/tq?tqx=out:csv&headers=1&gid={gid}"
+SHEET_FINANCEIRO = "Financeiro"
+# Leitura pelo NOME da aba (gviz). headers=1 -> a 1a linha vira cabecalho (com
+# headers=0 o gviz apaga o texto do cabecalho das colunas numericas). Cuidado: se
+# a aba for renomeada, o gviz devolve a PRIMEIRA aba da planilha sem erro — por
+# isso process() exige o cabecalho da Financeiro antes de aceitar as linhas.
+GVIZ_URL = "https://docs.google.com/spreadsheets/d/{sid}/gviz/tq?tqx=out:csv&headers=1&sheet={sheet}"
 
 # Identificação do cliente/conta (usada só em textos — não afeta os números).
 CLIENT_NAME = "MCTV"
 MAIN_PRODUCT = "Funil de Vendas"
-# Prefixo de campanha que entra na dash. None/"" = TODAS as campanhas da aba.
-# A aba tem as campanhas antigas "[CAP] [VENDAS] ..." (agosto) e as novas
-# "MC | E1-CAP ..." / "MC | E4-VEN ..." (setembro em diante); todas sao da
-# operacao de vendas da MCTV, entao o padrao e nao filtrar.
-MAIN_PRODUCT_PREFIX = None
 
 ACCOUNT_TZ_NAME = "America/Sao_Paulo"  # "hoje" da dash (o dia da planilha entra como esta)
 try:
@@ -76,24 +74,18 @@ except Exception:
 
 BRT = timezone(timedelta(hours=-3))   # horario de Brasilia (so p/ o carimbo "ultima atualizacao")
 TAX_FACTOR = 1.13806   # fator de imposto/taxa sobre o gasto de mídia paga (Meta Ads) = 13,806%.
-                       # O toggle "Imposto Meta" ja vem LIGADO (app.js STATE.tax=true): gasto,
-                       # CPM, CPC, Custo/Checkout, CPA e ROAS ja saem com o imposto aplicado.
-                       # Desligar o toggle mostra o gasto bruto. Faturamento nunca leva imposto.
+                       # A coluna "Total Investido Ads" vem SEM imposto (bate com o gasto da
+                       # aba Criativos). O toggle "Imposto Meta" ja vem LIGADO (app.js
+                       # STATE.tax=true): gasto, CPM, CPC, CPA, ROAS e Lucro ja saem com o
+                       # imposto aplicado. Faturamento (bruto e liquido) nunca leva imposto.
 
 # --------------------------------------------------------------------------- #
-# Regras da aba Relatório (Top anúncios)
+# Metas & parâmetros da conta (DEFAULTS do painel editável da aba Relatório)
 # --------------------------------------------------------------------------- #
-# Amostra mínima para julgar um anúncio. Abaixo disso ele entra como
-# "Em observação" — nunca é classificado só porque teve 1 venda com pouco gasto.
-SAMPLE_MIN_SPEND = 100.0   # gasto mínimo (R$) para amostra relevante
-SAMPLE_MIN_VENDAS = 2      # vendas mínimas para julgar o anúncio
-
-# Metas & parâmetros da conta (DEFAULTS do painel editável da aba Relatório).
 # None = "meta não definida" (métrica aparece sem cor até o gestor preencher).
 META_CPA = None            # meta de CPA (R$/venda)
-META_ROAS = None           # ROAS mínimo desejado
-VOLUME_MIN_AMOSTRAL = SAMPLE_MIN_VENDAS
-N_DIAS_CORTE = 5           # dias consecutivos acima do teto p/ considerar corte
+META_ROAS = None           # ROAS mínimo desejado (faturamento bruto ÷ gasto)
+VOLUME_MIN_AMOSTRAL = 2    # vendas mínimas para julgar CPA/ROAS de uma semana
 
 
 # --------------------------------------------------------------------------- #
@@ -126,12 +118,8 @@ def fetch_csv(url: str) -> list[list[str]]:
     raise last_err
 
 
-def fetch_sheet(sid: str, gid: str) -> list[list[str]]:
-    try:
-        return fetch_csv(EXPORT_URL.format(sid=sid, gid=gid))
-    except Exception as exc:            # HTTP 4xx, HTML de login, timeout...
-        print(f"[fetch_sheet] export falhou ({exc!r}); lendo pelo gviz", file=sys.stderr)
-        return fetch_csv(GVIZ_URL.format(sid=sid, gid=gid))
+def fetch_sheet(sid: str, sheet: str) -> list[list[str]]:
+    return fetch_csv(GVIZ_URL.format(sid=sid, sheet=urllib.parse.quote(sheet)))
 
 
 def read_csv_file(path: str) -> list[list[str]]:
@@ -170,9 +158,9 @@ def to_float(v) -> float:
 
 def to_count(v) -> float:
     """Contagens e valores em R$. Se alguém tirar as casas decimais da coluna na
-    planilha, o export passa a mostrar "1.019" (pt-BR: ponto = milhar), que o
-    to_float leria como 1,019. Só para estas colunas — numa taxa como o ROAS um
-    "2.125" sem vírgula pode ser decimal de verdade."""
+    planilha, o export passa a mostrar "1.294" (pt-BR: ponto = milhar), que o
+    to_float leria como 1,294. Só para estas colunas — numa taxa como o CTR um
+    "6.125" sem vírgula pode ser decimal de verdade."""
     s = re.sub(r"[^\d,.\-]", "", str(v if v is not None else "").strip())
     if "," not in s and re.fullmatch(r"-?\d{1,3}(\.\d{3})+", s):
         s = s.replace(".", "")
@@ -197,9 +185,10 @@ def parse_date(v: str) -> str | None:
     return None
 
 
-def header_index(header, wanted, fallback):
+def header_index(header, wanted):
     """Acha cada coluna pelo nome do cabeçalho: primeiro nome exato, depois
-    "contém"."""
+    "contém". Coluna ausente fica None (nunca cai numa posição fixa: com a aba
+    errada isso leria outra métrica no lugar)."""
     idx = {}
     hn = [norm(h) for h in header]
     for key, aliases in wanted.items():
@@ -216,13 +205,6 @@ def header_index(header, wanted, fallback):
                 if found is not None:
                     break
         idx[key] = found
-    # Cabeçalho irreconhecível (renomearam tudo): cai nas posições atuais da aba.
-    # Se ele foi reconhecido, coluna ausente fica ausente — usar a posição dela
-    # leria outra métrica no lugar (ex.: Checkouts no lugar de Cliques).
-    if sum(v is not None for v in idx.values()) < len(wanted) // 2:
-        if "data" not in hn:
-            raise SystemExit(f"Cabeçalho da aba Criativos irreconhecível: {header[:6]}")
-        return dict(fallback)
     return idx
 
 
@@ -233,111 +215,82 @@ def cell(row, i):
 
 
 # --------------------------------------------------------------------------- #
-# Processamento -> registros brutos
+# Processamento -> registros brutos (1 por dia)
 # --------------------------------------------------------------------------- #
 COLS = {
-    "day": ["data", "day"],
-    "ad": ["anuncio_nome", "anuncio", "ad name"],
-    "campaign": ["campanha", "campaign name"],
-    "adset": ["conjunto", "ad set name"],
-    "reach": ["alcance", "reach"],
-    "impr": ["impressoes", "impressions"],
-    "clicks": ["cliques no link", "link clicks"],
-    "spent": ["gasto_anuncio", "gasto", "amount spent"],
+    "day": ["data", "dia", "day"],
+    "spent": ["total investido ads", "total investido", "investimento", "gasto", "amount spent"],
+    "fb": ["faturamento bruto"],
+    "fl": ["faturamento liquido"],
+    "lucro": ["lucro real", "lucro"],
     "vendas": ["vendas", "purchases"],
     "checkouts": ["checkouts", "checkout"],
-    "hook": ["hook_rate", "hook rate"],
-    "hold": ["hold_rate", "hold rate"],
-    "p25": ["play 25%"],
-    "r2550": ["retencao 25>50%"],
-    "p100": ["play 100%"],
+    "clicks": ["cliques", "clicks"],
     "ctr": ["ctr"],
-    "cpc": ["cpc"],
-    "roas": ["roas"],
-    "key": ["chave_unica"],
+    "link_clicks": ["link clicks", "cliques no link"],
+    "lpv": ["landing page views", "visualizacoes da pagina de destino", "visualizacoes da pagina"],
 }
-# posição atual das colunas na aba (só vale se o cabeçalho mudar de nome)
-FALLBACK = {"day": 0, "ad": 1, "campaign": 2, "adset": 3, "reach": 4, "impr": 6, "clicks": 8,
-            "spent": 9, "vendas": 10, "checkouts": 12, "hook": 13, "hold": 14, "p25": 15,
-            "r2550": 16, "p100": 18, "ctr": 19, "cpc": 20, "roas": 21, "key": 22}
-
-
-def clicks_of(raw_clicks: str, spent: float, cpc: float, ctr: float, impr: float) -> float:
-    """Cliques no link. A coluna vem vazia na aba; quando vier preenchida, vale
-    ela. Senão: Gasto/CPC (o CPC da planilha é Gasto/Cliques) e, com CPC zero,
-    CTR x Impressões (o CTR é Cliques/Impressões em %)."""
-    if raw_clicks:
-        return to_float(raw_clicks)
-    if cpc > 0 and spent > 0:
-        return float(round(spent / cpc))
-    if ctr > 0 and impr > 0:
-        return float(round(ctr * impr / 100.0))
-    return 0.0
+# sem estas colunas a aba não é a Financeiro (ou mudou demais): o build para em
+# vez de publicar números de outra aba
+OBRIGATORIAS = ("day", "spent", "fb", "vendas")
 
 
 def process(rows):
     header = rows[0] if rows else []
-    ix = header_index(header, COLS, FALLBACK)
-    faltando = [k for k in ("day", "ad", "campaign", "spent", "impr") if ix.get(k) is None]
+    ix = header_index(header, COLS)
+    faltando = [k for k in OBRIGATORIAS if ix.get(k) is None]
     if faltando:
-        raise SystemExit(f"Colunas obrigatórias não encontradas na aba Criativos: {faltando}")
+        raise SystemExit(f"A aba {SHEET_FINANCEIRO} não foi encontrada ou mudou de formato: "
+                         f"faltam as colunas {faltando}. Cabeçalho lido: {header[:8]}")
+    # "Cliques" (todos os cliques) não pode cair em "Link Clicks"/"Cliques no link"
+    if ix["clicks"] is not None and ix["clicks"] == ix["link_clicks"]:
+        ix["clicks"] = None
 
-    meta = []
-    vistos = {}
-    fora_prefixo = 0
+    fin = []
+    por_dia = {}
     sem_data = 0
     duplicadas = 0
+    lucro_diverge = []
     for row in rows[1:]:
         if not any((c or "").strip() for c in row):
             continue
         day = parse_date(cell(row, ix["day"]))
-        camp = cell(row, ix["campaign"])
         if not day:
-            if camp or cell(row, ix["ad"]):
+            if any(cell(row, ix[k]) for k in ("spent", "fb", "vendas")):
                 sem_data += 1
             continue
-        if MAIN_PRODUCT_PREFIX and not norm(camp).startswith(norm(MAIN_PRODUCT_PREFIX)):
-            fora_prefixo += 1
-            continue
         sp = to_count(cell(row, ix["spent"]))
-        im = to_count(cell(row, ix["impr"]))
-        cpc = to_float(cell(row, ix["cpc"]))
+        fl = to_count(cell(row, ix["fl"]))
+        cl = to_count(cell(row, ix["clicks"]))
         ctr = to_float(cell(row, ix["ctr"]))
-        hook = to_float(cell(row, ix["hook"]))
-        hold = to_float(cell(row, ix["hold"]))
-        p25 = to_count(cell(row, ix["p25"]))
-        roas = to_float(cell(row, ix["roas"]))
         rec = {
             "d": day,
-            "camp": camp or "(sem campanha)",
-            "adset": cell(row, ix["adset"]) or "(sem conjunto)",
-            "ad": cell(row, ix["ad"]) or "(sem anúncio)",
-            "sp": round(sp, 4),
-            "im": im,
-            "rc": to_count(cell(row, ix["reach"])),
-            "cl": clicks_of(cell(row, ix["clicks"]), sp, cpc, ctr, im),
-            "ck": to_count(cell(row, ix["checkouts"])),
+            "sp": round(sp, 2),
+            "fb": round(to_count(cell(row, ix["fb"])), 2),
+            "fl": round(fl, 2),
             "vd": to_count(cell(row, ix["vendas"])),
-            "fat": round(roas * sp, 2),
-            # contagens de vídeo (ver docstring): % -> número de pessoas
-            "v3": round(hook * im / 100.0, 2),
-            "hd": round(hold * im / 100.0, 2),
-            "p25": p25,
-            "p50": round(to_float(cell(row, ix["r2550"])) * p25 / 100.0, 2),
-            "p100": to_count(cell(row, ix["p100"])),
+            "ck": to_count(cell(row, ix["checkouts"])),
+            "cl": cl,
+            # impressões: o CTR da aba é Cliques ÷ Impressões (em %)
+            "im": float(round(cl * 100.0 / ctr)) if ctr > 0 and cl > 0 else 0.0,
+            "lc": to_count(cell(row, ix["link_clicks"])),
+            "lpv": to_count(cell(row, ix["lpv"])),
         }
-        # Chave_Unica = id do anúncio + dia. Linha repetida (mesma chave) não
-        # pode somar duas vezes: fica a última.
-        key = cell(row, ix["key"])
-        if key:
-            if key in vistos:
-                meta[vistos[key]] = rec
-                duplicadas += 1
-                continue
-            vistos[key] = len(meta)
-        meta.append(rec)
+        # Conferência: o Lucro Real da aba é Faturamento Líquido − Investimento
+        # (sem imposto). A dash recalcula; aqui só avisa se a fórmula mudar.
+        lucro_txt = cell(row, ix["lucro"])
+        if lucro_txt and abs(to_count(lucro_txt) - (fl - sp)) > 0.02:
+            lucro_diverge.append(day)
+        # um dia por linha: dia repetido não pode somar duas vezes, fica o último
+        if day in por_dia:
+            fin[por_dia[day]] = rec
+            duplicadas += 1
+            continue
+        por_dia[day] = len(fin)
+        fin.append(rec)
 
-    dates = sorted({m["d"] for m in meta if m["d"]})
+    fin.sort(key=lambda r: r["d"])
+    dates = [r["d"] for r in fin]
     now_brt = datetime.now(BRT)
     hoje_conta = datetime.now(ACCOUNT_TZ)
     return {
@@ -350,18 +303,14 @@ def process(rows):
             "tax_factor": TAX_FACTOR,
             "client_name": CLIENT_NAME,
             "main_product": MAIN_PRODUCT,
-            # a planilha só traz Hold Rate zerado hoje; sem dado, a coluna some
-            "tem_hold": any(m["hd"] > 0 for m in meta),
-            "sample_min_spend": SAMPLE_MIN_SPEND,
-            "sample_min_vendas": SAMPLE_MIN_VENDAS,
             "meta_cpa": META_CPA,
             "meta_roas": META_ROAS,
             "volume_min_amostral": VOLUME_MIN_AMOSTRAL,
-            "n_dias_corte": N_DIAS_CORTE,
-            "linhas_descartadas": {"sem_data": sem_data, "fora_do_prefixo": fora_prefixo,
-                                   "duplicadas": duplicadas},
+            "tem_trafego": ix["link_clicks"] is not None and ix["lpv"] is not None,
+            "linhas_descartadas": {"sem_data": sem_data, "duplicadas": duplicadas},
+            "lucro_diverge": lucro_diverge,
         },
-        "meta": meta,
+        "fin": fin,
     }
 
 
@@ -386,7 +335,7 @@ def render(data, template_path):
     styles = readf("identidade-visual.css") + "\n" + readf("estilos.css")
     tpl = tpl.replace("__STYLES__", styles)
     tpl = tpl.replace("__APP_JS__", readf("app.js"))
-    # "</" escapado: um nome de anúncio com "</script>" não fecha o bloco de dados
+    # "</" escapado: um texto da planilha com "</script>" não fecha o bloco de dados
     tpl = tpl.replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
     tpl = tpl.replace("__BUILD_ID__", data["build"]["build_id"])
     tpl = tpl.replace("__GENERATED_BRT__", data["build"]["generated_at_brt"])
@@ -395,18 +344,18 @@ def render(data, template_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--criativos-file", help="CSV local da aba Criativos (teste)")
+    ap.add_argument("--financeiro-file", help="CSV local da aba Financeiro (teste)")
     ap.add_argument("--template", default="build/template.html")
     ap.add_argument("--out", default="dist/index.html")
     args = ap.parse_args()
 
-    rows = (read_csv_file(args.criativos_file) if args.criativos_file
-            else fetch_sheet(SPREADSHEET_ID, GID_CRIATIVOS))
+    rows = (read_csv_file(args.financeiro_file) if args.financeiro_file
+            else fetch_sheet(SPREADSHEET_ID, SHEET_FINANCEIRO))
     data = process(rows)
-    if not data["meta"]:
-        # aba vazia (extração reescrevendo), HTML ou outra aba: falhar aqui faz o
-        # Actions parar antes do deploy e o Pages segue com a última versão boa
-        raise SystemExit("ERRO: a aba Criativos veio sem nenhuma linha válida; "
+    if not data["fin"]:
+        # aba vazia ou sem nenhuma data válida: falhar aqui faz o Actions parar
+        # antes de publicar e o Pages segue com a última versão boa
+        raise SystemExit(f"ERRO: a aba {SHEET_FINANCEIRO} veio sem nenhuma linha válida; "
                          "abortando para não publicar uma dash zerada")
 
     html = render(data, args.template)      # antes de abrir o arquivo: erro aqui não deixa index.html vazio
@@ -416,18 +365,27 @@ def main():
 
     b = data["build"]
     d = b["linhas_descartadas"]
-    m = data["meta"]
+    m = data["fin"]
     sp = sum(r["sp"] for r in m)
+    fl = sum(r["fl"] for r in m)
     print("== build ok ==", file=sys.stderr)
     print(f"  periodo    : {b['date_min']} -> {b['date_max']}", file=sys.stderr)
-    print(f"  linhas     : {len(m)} (anúncio x dia)", file=sys.stderr)
-    print(f"  descartadas: {d['sem_data']} sem data · {d['fora_do_prefixo']} fora do prefixo · "
-          f"{d['duplicadas']} duplicadas", file=sys.stderr)
+    print(f"  dias       : {len(m)} · descartadas: {d['sem_data']} sem data · "
+          f"{d['duplicadas']} dias repetidos", file=sys.stderr)
     print(f"  gasto      : R$ {sp:,.2f} (sem imposto; fator {TAX_FACTOR})", file=sys.stderr)
-    print(f"  impressoes : {sum(r['im'] for r in m):,.0f} · cliques {sum(r['cl'] for r in m):,.0f}",
+    print(f"  trafego    : impressoes {sum(r['im'] for r in m):,.0f} · cliques {sum(r['cl'] for r in m):,.0f} · "
+          f"no link {sum(r['lc'] for r in m):,.0f} · visualizacoes {sum(r['lpv'] for r in m):,.0f}",
           file=sys.stderr)
-    print(f"  checkouts  : {sum(r['ck'] for r in m):,.0f} · vendas {sum(r['vd'] for r in m):,.0f} · "
-          f"faturamento R$ {sum(r['fat'] for r in m):,.2f}", file=sys.stderr)
+    print(f"  vendas     : checkouts {sum(r['ck'] for r in m):,.0f} · vendas {sum(r['vd'] for r in m):,.0f} · "
+          f"bruto R$ {sum(r['fb'] for r in m):,.2f} · liquido R$ {fl:,.2f}", file=sys.stderr)
+    print(f"  lucro      : R$ {fl - sp:,.2f} sem imposto · R$ {fl - sp * TAX_FACTOR:,.2f} com imposto",
+          file=sys.stderr)
+    if b["lucro_diverge"]:
+        print(f"  AVISO: Lucro Real da planilha != Fat. Liquido - Investido em "
+              f"{len(b['lucro_diverge'])} dia(s): {', '.join(b['lucro_diverge'][:10])}", file=sys.stderr)
+    if not b["tem_trafego"]:
+        print("  AVISO: colunas Link Clicks / Landing Page Views ausentes; Connect Rate fica '-'",
+              file=sys.stderr)
     print(f"  out        : {args.out}", file=sys.stderr)
 
 
