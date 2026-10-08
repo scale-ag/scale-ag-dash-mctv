@@ -47,8 +47,10 @@ Números em pt-BR (`"1.294,00"`); contagens e R$ passam por `to_count` (ponto = 
 Leitura: `gviz/tq?tqx=out:csv&headers=1&sheet=Financeiro` (o gid da aba não
 aparece no HTML público). **Pegadinha:** o gviz por nome devolve a PRIMEIRA aba
 sem erro se o nome não existir; por isso `process()` exige as colunas `Data`,
-`Total Investido Ads`, `Faturamento Bruto` e `Vendas` e aborta o build se faltar
-alguma (o Pages segue com a última versão boa). Não use `headers=0`: ele zera o
+`Total Investido Ads`, `Faturamento Bruto`, `Faturamento Líquido` e `Vendas` e
+aborta o build se faltar alguma (o Pages segue com a última versão boa). As
+demais são opcionais: se sumirem, o log avisa (`colunas_ausentes`) e a métrica
+que depende delas aparece "-" (sem `Cliques`/`CTR`, impressões, CPM e CTR). Não use `headers=0`: ele zera o
 texto do cabeçalho nas colunas numéricas.
 
 ### O que bate com o quê (conferido em 08/10/2026)
@@ -117,7 +119,12 @@ data, KPIs, tabelas, gráficos, heatmap, imposto) roda no navegador.
 3. **Relatório** — espelha a Visão Geral + painel de **Metas** (Meta CPA, Meta
    ROAS, vendas mínimas p/ avaliar a semana; `localStorage['dm_metas']`) +
    **Resumo semanal** (segunda a domingo, mais recente no topo; Avaliável =
-   vendas ≥ mínimo, senão Em observação; CPA e ROAS colorem vs meta).
+   vendas ≥ mínimo, senão Em observação; CPA e ROAS colorem vs meta). Semana
+   cortada pelo período aparece parcial ("01/10 a 04/10", 4 dias).
+
+Médias "por dia" dividem pelos dias de calendário do período, do 1º ao último dia
+que a aba tem (hoje só conta quando a linha de hoje entra). Dia sem linha no meio
+conta como dia sem gasto (a aba pula dias parados, ex. 23/08 a 25/09).
    **Sem Insights de Tráfego por IA** (não foi pedido; não há Routine).
 
 Filtro: só por **dia** (clique na tabela diária, Ctrl = vários) e pelo período do

@@ -44,13 +44,17 @@ const finActive  = ()=> FIN.filter(r=>dateActive(r.d));
 /* período do seletor IGNORANDO os dias clicados: é o que a tabela diária lista,
    para dar para clicar (Ctrl) em outros dias depois do primeiro */
 const rangeActive = ()=> FIN.filter(r=>r.d && (!STATE.from || r.d>=STATE.from) && (!STATE.to || r.d<=STATE.to));
+/* dias de calendário entre f e t (inclusive) */
+const nDaysBetween=(f,t)=>Math.round((new Date(t+'T00:00:00')-new Date(f+'T00:00:00'))/86400000)+1;
 /* nº de dias do recorte (média por dia): dias clicados ou dias de calendário do
-   período, limitado ao intervalo que a planilha cobre */
+   período, limitado ao intervalo que a planilha cobre (do 1º ao último dia com
+   linha — o dia de hoje só conta depois que a linha dele entra na aba). Dia sem
+   linha no meio do intervalo conta como dia sem gasto. */
 function periodDays(){
   if(STATE.selDays.size) return STATE.selDays.size;
-  const f=[STATE.from,B.date_min].filter(Boolean).sort().pop(), t=[STATE.to,TODAY].filter(Boolean).sort()[0];
+  const f=[STATE.from,B.date_min].filter(Boolean).sort().pop(), t=[STATE.to,B.date_max||TODAY].filter(Boolean).sort()[0];
   if(!f||!t||f>t) return 1;
-  return Math.round((new Date(t+'T00:00:00')-new Date(f+'T00:00:00'))/86400000)+1;
+  return nDaysBetween(f,t);
 }
 
 /* ---------------- aggregation ----------------
@@ -176,6 +180,10 @@ function renderTable(cfg){
     return `<td class="${c.type==='dim'?'dim':''}${tc?' '+tc:''}${stkCls(c)}" title="${isFirst?'Total Geral':esc(fmtStd(c.type,v))}">${isFirst?'Total Geral':fmt(c.type,v)}</td>`;
   }).join('')+'</tr></tfoot>'; }
   table.style.width=fit?'100%':totalW+'px';
+  // fit: ocupa o card inteiro, mas nunca abaixo do que cabe sem cortar valor
+  // (colunas fixas + ~76px por coluna livre); abaixo disso a tabela rola dentro
+  // do card, em vez de espremer Vendas/CPA/ROAS até sumirem
+  table.style.minWidth=fit?cfg.cols.reduce((s,c)=>s+(parseInt(fitW(c),10)||76),0)+'px':'';
   table.innerHTML=colgroup+thead+tbody+tfoot;
   const cols=table.querySelector('colgroup').children;
   // sort handlers
@@ -568,9 +576,17 @@ function renderRelWeeks(){
   const fM=finActive();
   const wk={};
   fM.forEach(r=>{ const k=weekStart(r.d);
-    const w=wk[k]||(wk[k]={ini:k,dias:0,first:r.d,last:r.d,...zeroAgg()});
-    addTo(w,r); w.dias++; if(r.d<w.first) w.first=r.d; if(r.d>w.last) w.last=r.d; });
-  const list=Object.values(wk).sort((a,b)=>a.ini<b.ini?1:-1);   // semana mais recente no topo
+    addTo(wk[k]||(wk[k]={ini:k,...zeroAgg()}), r); });
+  /* dias do recorte dentro da semana: os dias clicados, ou a semana cortada pelo
+     período do seletor e pelo intervalo que a planilha cobre — a mesma regra do
+     periodDays. Assim a semana do início/fim do período aparece como parcial
+     ("01/10 a 04/10", 4 dias) em vez de parecer uma semana cheia. */
+  const janela=w=>{ const fim=addDays(w.ini,6);
+    if(STATE.selDays.size){ const ds=[...STATE.selDays].filter(d=>d>=w.ini&&d<=fim).sort();
+      return {first:ds[0], last:ds[ds.length-1], dias:ds.length}; }
+    const f=[w.ini,STATE.from,B.date_min].filter(Boolean).sort().pop(), t=[fim,STATE.to,B.date_max].filter(Boolean).sort()[0];
+    return {first:f, last:t, dias:nDaysBetween(f,t)}; };
+  const list=Object.values(wk).map(w=>Object.assign(w,janela(w))).sort((a,b)=>a.ini<b.ini?1:-1);   // semana mais recente no topo
   const ddmm=d=>brdate(d).slice(0,5);
   const cellsOf=(w,d)=>({ini:w.ini, per:ddmm(w.first)+(w.first===w.last?'':' a '+ddmm(w.last)),
     status:'', dias:w.dias, gasto:d.gasto, lc:w.lc, lpv:w.lpv, connect:d.connect, ck:w.ck, vd:w.vd,
@@ -579,9 +595,9 @@ function renderRelWeeks(){
     cells.status=obs?'Em observação':'Avaliável';   // texto p/ ordenar; o chip entra via afterRender
     return {k:w.ini, cells, _obs:obs, _cpa:d.cpa, _roas:d.roas}; });
   const tt=totals(fM), td=derive(tt);
-  const total={...cellsOf({ini:null,first:'',last:'',dias:fM.length,...tt},td), ini:null, per:'', status:''};
+  const total={...cellsOf({ini:null,first:'',last:'',dias:periodDays(),...tt},td), ini:null, per:'', status:''};
   const cols=[
-    {key:'ini',label:'Semana',type:'date',w:96},{key:'per',label:'Dias com dado',type:'dim'},
+    {key:'ini',label:'Semana',type:'date',w:96},{key:'per',label:'Período',type:'dim'},
     {key:'status',label:'Status',type:'dim',w:140},{key:'dias',label:'Dias',type:'int',w:60},
     {key:'gasto',label:'Gasto',type:'brl'},{key:'lc',label:'Cliq. link',type:'int'},
     {key:'lpv',label:'Visualiz.',type:'int'},{key:'connect',label:'Connect',type:'pct'},

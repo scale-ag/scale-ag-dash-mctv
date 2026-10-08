@@ -232,7 +232,9 @@ COLS = {
 }
 # sem estas colunas a aba não é a Financeiro (ou mudou demais): o build para em
 # vez de publicar números de outra aba
-OBRIGATORIAS = ("day", "spent", "fb", "vendas")
+# (o Faturamento Líquido entra aqui porque sem ele o Lucro sairia = −gasto em
+# todos os dias, um número errado e não um "-")
+OBRIGATORIAS = ("day", "spent", "fb", "fl", "vendas")
 
 
 def process(rows):
@@ -309,6 +311,8 @@ def process(rows):
             "tem_trafego": ix["link_clicks"] is not None and ix["lpv"] is not None,
             "linhas_descartadas": {"sem_data": sem_data, "duplicadas": duplicadas},
             "lucro_diverge": lucro_diverge,
+            # colunas opcionais que não vieram: a métrica que depende delas fica "-"
+            "colunas_ausentes": [k for k in COLS if ix.get(k) is None],
         },
         "fin": fin,
     }
@@ -383,6 +387,9 @@ def main():
     if b["lucro_diverge"]:
         print(f"  AVISO: Lucro Real da planilha != Fat. Liquido - Investido em "
               f"{len(b['lucro_diverge'])} dia(s): {', '.join(b['lucro_diverge'][:10])}", file=sys.stderr)
+    if b["colunas_ausentes"]:
+        print(f"  AVISO: colunas nao encontradas na aba {SHEET_FINANCEIRO}: {', '.join(b['colunas_ausentes'])} "
+              f"(sem Cliques/CTR as impressoes ficam 0 e CPM/CTR aparecem '-')", file=sys.stderr)
     if not b["tem_trafego"]:
         print("  AVISO: colunas Link Clicks / Landing Page Views ausentes; Connect Rate fica '-'",
               file=sys.stderr)
