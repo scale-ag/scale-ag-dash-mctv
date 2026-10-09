@@ -152,10 +152,12 @@
   .filter-bar .fb-lead{font-size:12px; font-weight:600; color:var(--ink)}
   .filter-bar .fb-chip{display:inline-flex; align-items:center; gap:6px; font-size:11.5px;
     background:var(--surface); border:1px solid var(--border); border-radius:999px; padding:3px 4px 3px 10px;
-    max-width:520px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    max-width:min(520px,100%); min-width:0; white-space:nowrap}
+  /* nome longo de campanha/conjunto encurta com "…" e o ✕ continua clicável */
+  .filter-bar .fb-txt{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
   .filter-bar .fb-chip b{font-weight:700; color:var(--muted)}
   .filter-bar .fb-x{border:0; background:transparent; cursor:pointer; color:var(--muted);
-    font-size:12px; line-height:1; padding:3px 6px; border-radius:999px}
+    font-size:12px; line-height:1; padding:3px 6px; border-radius:999px; flex:0 0 auto}
   .filter-bar .fb-x:hover{background:var(--bad); color:#fff}
   .filter-bar .fb-all{margin-left:auto; border:1px solid var(--border); background:var(--surface);
     color:var(--ink); font-size:11.5px; font-weight:600; cursor:pointer; border-radius:8px; padding:4px 10px}
@@ -332,6 +334,8 @@
      classe .hover-row, aplicada às 3 ao mesmo tempo. */
   .dt-split table.dt tbody tr:hover{background:transparent}
   .dt-split table.dt tbody tr.hover-row{background:var(--accent-blue-light)}
+  /* linha selecionada continua com a cor de seleção sob o mouse (Ctrl+clique) */
+  .dt-split table.dt tbody tr.sel, .dt-split table.dt tbody tr.sel.hover-row{background:var(--selected)}
   .rel-adlink{font-size:12px; font-weight:600; color:var(--accent-blue); text-decoration:none; white-space:nowrap}
   .rel-adlink:hover{text-decoration:underline}
   .rel-adlink.off{color:var(--muted); font-weight:400}
