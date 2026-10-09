@@ -1,8 +1,10 @@
 # Guia de Replicação — Dashboard de BI estática (HTML/CSS/JS + Chart.js)
 
 > **Guia genérico do modelo da agência, copiado de `giaco---FORM7`.** Neste repo
-> (MCTV) a fonte é uma só (aba Financeiro, registros diários `fin[]` sem leads,
-> sem quebra por anúncio e sem dados pessoais), `STATE.tax=true` com período
+> (MCTV) as fontes são as queries do gerenciador (`meta[]`, anúncio × dia, chaves
+> `c`/`s`/`a` para campanha/conjunto/anúncio) e a aba Financeiro (`fin[]`, só
+> faturamento líquido e cliques por dia), sem leads e sem dados pessoais; o recorte
+> do filtro cruzado é `metaActive(ex)`/`dimFilter` em vez de `metaScope`; `STATE.tax=true` com período
 > padrão "Este mês", o `renderTable` está em `build/app.js`, o Pages publica pela
 > branch `gh-pages` (ver `CLAUDE.md`, "Publicação") e não existem
 > `GUIA-RELATORIOS.md` nem `relatorios.json`. Para o que vale aqui, siga o `CLAUDE.md`.

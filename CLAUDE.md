@@ -1,4 +1,4 @@
-# CLAUDE.md — Contexto do projeto (MCTV · Funil de Vendas · aba Financeiro)
+# CLAUDE.md — Contexto do projeto (MCTV · Funil de Vendas · queries + Financeiro)
 
 > Este arquivo é lido automaticamente pelo Claude Code ao abrir o repositório.
 > Ele carrega TODO o contexto necessário para continuar o trabalho sem depender
@@ -6,71 +6,78 @@
 >
 > Nasceu do modelo de dashboard da agência (mesmo motor de `scale-ag/giaco---FORM7`,
 > que por sua vez veio de `scale-ag/dash-familia-aprovada-mtr-set26`). A diferença
-> é que aqui o funil é de **VENDAS** e a fonte é **uma aba só** (Financeiro, 1 linha por dia).
+> é que aqui o funil é de **VENDAS** (Initiate Checkout → compra), sem lista de leads.
 
 ---
 
 ## O que é
 
 Dashboard de **Funil de Vendas** — app de BI estático (HTML/CSS/JS puro +
-Chart.js via CDN) publicado no **GitHub Pages**, alimentado pela aba **Financeiro**
-da planilha de acompanhamento da MCTV, que se atualiza sozinho a cada ~30 min
-(build 100% na nuvem via GitHub Actions, disparado externamente pelo cron-job.org).
+Chart.js via CDN) publicado no **GitHub Pages**, alimentado pelas **queries do
+gerenciador** (Meta Ads, anúncio × dia) e pela aba **Financeiro** da planilha de
+acompanhamento da MCTV, que se atualiza sozinho a cada ~30 min (build 100% na
+nuvem via GitHub Actions, disparado externamente pelo cron-job.org).
 
-- **Cliente:** MCTV · **Funil:** Funil de Vendas (nome definitivo ainda não informado) · **Plataforma:** Meta Ads
+- **Cliente:** MCTV ("Manhattan") · **Funil:** Funil de Vendas (nome definitivo ainda não informado) · **Plataforma:** Meta Ads
 - **Repo:** `scale-ag/scale-ag-dash-mctv` · **URL pública:** https://scale-ag.github.io/scale-ag-dash-mctv/
-- **Somente leitura** da planilha. Nunca escrever de volta.
+- **Somente leitura** das planilhas. Nunca escrever de volta.
 
-## Fonte de dados (Google Sheets) — UMA aba
+## Fontes de dados (Google Sheets) — DUAS planilhas
 
-| Planilha | ID | Aba |
-|---|---|---|
-| **MCTV \| ACOMPANHAMENTO GERAL \| LOOKER**, aba `Financeiro` | `1X6XKBc65KVsfrFIoBHsk_rxC4iUrzu0l9VSYoaF6PHY` | lida pelo **nome** (`SHEET_FINANCEIRO`) |
+| # | Planilha | ID | Aba | Leitura |
+|---|---|---|---|---|
+| 1 | **Queries do gerenciador** (Meta Ads, "Manhattan") | `1ldYMpIPWZ5Dm4hD35TzE6aalXoz3k1sktK5hd2KAXAU` | gid `0` | `export?format=csv&gid=0`, com o gviz por gid de reserva (`fetch_gid`) |
+| 2 | **MCTV \| ACOMPANHAMENTO GERAL \| LOOKER**, aba `Financeiro` | `1X6XKBc65KVsfrFIoBHsk_rxC4iUrzu0l9VSYoaF6PHY` | pelo **nome** (`SHEET_FINANCEIRO`) | `gviz/tq?tqx=out:csv&headers=1&sheet=Financeiro` |
 
-Em 08/10/2026 o gestor pediu: "Tem que puxar o dado dessa planilha só da aba
-financeiro". Até então a dash lia a aba **Criativos** (anúncio × dia); essa aba
-**não é mais lida** — por isso não há tabelas por campanha/conjunto/anúncio,
-alcance, frequência nem métricas de vídeo. Se pedirem a quebra por anúncio de
-volta, é ler a Criativos de novo além da Financeiro (desenvolvimento novo).
+Histórico: 07/10/2026 a dash nasceu da aba Criativos; 08/10 o gestor pediu "só
+da aba financeiro"; **09/10 o gestor mandou as queries** ("Atualiza a planilha de
+queries do Manhatan", "Adicione as campanhas, conjuntos e criativos", "métricas
+de iniciate checkout", "Taxas de conversão de checkout"). A aba Criativos **não
+é lida**.
 
-1 linha = **1 dia** (26 dias entre 04/08 e 07/10/2026 na primeira leitura; há dias
-faltando e dias zerados). Colunas: `Data` · `Total Investido Ads` ·
-`Faturamento Bruto` · `Faturamento Líquido` · `Lucro Real` · `ROAS` · `Vendas` ·
-`Checkouts` · `CPA` · `Cliques` · `CTR` · `CPC` · `Link Clicks` ·
-`Landing Page Views` · `Connect Rate (%)` (+ colunas vazias à direita). O build
-lê pelo nome do cabeçalho (`build.py` → `COLS`): Data, Investido, Fat. bruto,
-Fat. líquido, Lucro (só para conferência), Vendas, Checkouts, Cliques, CTR, Link
-Clicks e Landing Page Views. `ROAS`, `CPA`, `CPC` e `Connect Rate` são ignoradas
-porque o navegador recalcula a partir das contagens.
-Números em pt-BR (`"1.294,00"`); contagens e R$ passam por `to_count` (ponto = milhar).
+### 1. Queries (fonte de TODA a mídia e das conversões)
+1 linha = **dia × campanha × conjunto × anúncio** (~290 linhas de 04/08 a 09/10/2026,
+ordenadas do dia mais recente para o mais antigo). Colunas: `Day` · `Campaign Name` ·
+`Ad Set Name` · `Ad Name` · `Amount Spent` · `Purchases` · `Cost per Purchase` ·
+`Purchases Conversion Value` · `Checkouts Initiated` · `Cost per Checkout Initiated` ·
+`Landing Page Views` · `Reach` · `Link Clicks` · `Impressions`. Números em pt-BR
+(`"21,64"`), muitas células vazias (= 0).
 
-Leitura: `gviz/tq?tqx=out:csv&headers=1&sheet=Financeiro` (o gid da aba não
-aparece no HTML público). **Pegadinha:** o gviz por nome devolve a PRIMEIRA aba
-sem erro se o nome não existir; por isso `process()` exige as colunas `Data`,
-`Total Investido Ads`, `Faturamento Bruto`, `Faturamento Líquido` e `Vendas` e
-aborta o build se faltar alguma (o Pages segue com a última versão boa). As
-demais são opcionais: se sumirem, o log avisa (`colunas_ausentes`) e a métrica
-que depende delas aparece "-" (sem `Cliques`/`CTR`, impressões, CPM e CTR). Não use `headers=0`: ele zera o
-texto do cabeçalho nas colunas numéricas.
+`build.py` → `QCOLS`/`process_queries`: lê Day, Campaign/Ad Set/Ad Name, Amount
+Spent (`sp`), Impressions (`im`), Link Clicks (`lc`), Landing Page Views (`lpv`),
+Checkouts Initiated (`ic`), Purchases (`vd`) e Purchases Conversion Value (`fb`).
+`Purchases` e `Checkouts Initiated` exigem o nome **exato** (o "contém" pegaria
+`Cost per Purchase`/`Purchases Conversion Value`). Custos por linha são
+ignorados (o navegador recalcula). **`Reach` não é lido**: alcance é deduplicado
+e somar linhas anúncio × dia infla o número. Linha toda zerada é descartada
+(anúncio parado; não muda soma). Sem Day/Campaign/Ad Set/Ad/Amount Spent o build
+aborta.
 
-### O que bate com o quê (conferido em 08/10/2026)
-- `Total Investido Ads` = soma do `Gasto_Anuncio` da aba Criativos no mesmo dia,
-  **sem imposto**.
-- `Vendas`/`Checkouts` = soma da Criativos (10 vendas, 74 checkouts no total).
-- `Faturamento Bruto` = ROAS × gasto da Criativos (R$ 3.157,00 no total).
-- `Faturamento Líquido` ≈ bruto × 0,9101 (taxas da plataforma de venda, ~9%).
-- `Lucro Real` = Faturamento Líquido − Total Investido, **sem imposto** (todas as linhas).
-- `Link Clicks` = os "cliques" da aba Criativos; `Cliques` é o total de cliques do anúncio.
-- Impressões = `Cliques` ÷ `CTR` bate com as impressões da Criativos (±1 por arredondamento do CTR).
+### 2. Financeiro (só o que as queries não têm)
+1 linha = **1 dia**. Da aba entram **só** `Faturamento Líquido` (`fl`) e `Cliques`
+(todos os cliques, `cl`) — payload `fin: [{d, fl, cl}]`. As demais colunas
+(`Total Investido Ads`, `Faturamento Bruto`, `Vendas`, `Checkouts`, `Link Clicks`,
+`Landing Page Views`…) servem só para a **conferência**: `conferencia_dias()`
+compara dia a dia com a soma das queries e imprime `AVISO` no log se divergir.
+Em 09/10/2026 as duas bateram em todos os dias (gasto, vendas, fat. bruto,
+checkouts = Checkouts Initiated, cliques no link, visualizações).
 
-### Regras de derivação (`build.py` → `process`)
-- **Impressões** = `Cliques × 100 ÷ CTR` (o CTR da aba é Cliques ÷ Impressões em %).
-- **Lucro** é recalculado no navegador: Faturamento Líquido − Gasto × imposto. Com o
-  toggle desligado bate com o `Lucro Real` da planilha; o build avisa no log se a
-  fórmula da planilha mudar (`lucro_diverge`).
-- **Dia repetido** fica com a última linha (não soma duas vezes).
-- **Build vazio não publica:** aba sem linhas válidas ou cabeçalho de outra aba
-  → `build.py` sai com erro e o Pages continua com a última versão boa.
+`process_fin` exige `Data`, `Total Investido Ads`, `Faturamento Bruto`,
+`Faturamento Líquido` e `Vendas` e aborta se faltar (o gviz por nome devolve a
+PRIMEIRA aba sem erro se a aba for renomeada). Não use `headers=0`: ele zera o
+texto do cabeçalho nas colunas numéricas. **Dia repetido** fica com a última linha.
+`Lucro Real` da aba = Faturamento Líquido − Total Investido, **sem imposto**; o
+build avisa se a fórmula mudar (`lucro_diverge`).
+
+### Regra que vale em todo o projeto: o que só existe por DIA
+Faturamento líquido, Lucro e Cliques (todos) vêm da Financeiro, que **não quebra
+por campanha/conjunto/anúncio**. Com filtro de campanha/conjunto/anúncio ativo
+(`dimActive()` em `app.js`) esses valores ficam `null` ("-"): o funil apaga as
+etapas, os gráficos de lucro mostram aviso e os KPIs de lucro mostram "só por dia
+(aba Financeiro)". Atribuí-los a um anúncio seria inventar número.
+`scopeRows()`/`scopeRange()` juntam as linhas das queries com as da Financeiro só
+quando não há filtro de dimensão; `gate(a, fin)` zera `fl`/`cl` para `null` nos
+agregados que não vêm do recorte diário completo.
 
 ### Imposto da mídia paga
 `TAX_FACTOR = 1.13806` (13,806%) em `build.py`. Toggle "Imposto Meta" **ligado por
@@ -80,21 +87,23 @@ com imposto). Faturamento bruto e líquido nunca levam imposto.
 
 ## Funil
 
-`Gasto → Impressões → Cliques → Cliques no link → Visualizações da página →
-Checkouts → Vendas → Faturamento bruto → Faturamento líquido → Lucro Real`, com
+`Gasto → Impressões → Cliques (todos) → Cliques no link → Visualizações da página →
+Initiate Checkout → Vendas → Faturamento bruto → Faturamento líquido → Lucro Real`, com
 CPM · CTR · CPC · CTR do link · Custo/clique no link · Connect Rate (visualizações ÷
-cliques no link) · Custo/visualização · Custo/Checkout · Página→Checkout · CPA ·
-Checkout→Venda · ROAS · Ticket médio · ROAS líquido · Taxas da venda · ROI · Margem.
-Não há lead/MQL nesta fonte.
+cliques no link) · Custo/visualização · **Custo/IC** · **Página→IC** (IC ÷
+visualizações) · **Clique→IC** (IC ÷ cliques no link) · **IC→Venda** (vendas ÷ IC) ·
+CPA · ROAS · Ticket médio · ROAS líquido · Taxas da venda · ROI · Margem.
+**IC** = Initiate Checkout (`Checkouts Initiated` das queries). Não há lead/MQL.
+Taxas são sempre soma ÷ soma no recorte (ponderadas), nunca média de taxas.
 
 ## Arquitetura / arquivos
 
 ```
-build/build.py            # lê a aba Financeiro (read-only), emite REGISTROS BRUTOS (fin[], 1 por dia); render() costura os arquivos abaixo
+build/build.py            # lê as queries + a aba Financeiro (read-only), emite REGISTROS BRUTOS (meta[] anúncio × dia, fin[] dia); render() costura os arquivos abaixo
 build/template.html       # esqueleto HTML. Placeholders __STYLES__, __APP_JS__, __DATA_JSON__, __BUILD_ID__, __GENERATED_BRT__
 build/identidade-visual.css  # TODAS as cores (tema escuro=padrão / claro no botão Tema)
 build/estilos.css         # layout/componentes
-build/app.js              # lógica + renderização (KPIs, funil, tabelas, period-picker, heatmap, Relatório)
+build/app.js              # lógica + renderização (KPIs, funil, tabelas, hierarquia, filtro cruzado, period-picker, heatmap, Relatório)
 .github/workflows/deploy.yml  # roda build.py e publica no Pages via branch gh-pages (workflow_dispatch + schedule + push)
 dist/index.html           # saída gerada (gitignored; o Actions reconstrói)
 GUIA-REPLICACAO.md        # como replicar este modelo para outros clientes
@@ -105,46 +114,61 @@ O `build.py` **não agrega**: exporta as linhas cruas e TODA a lógica (filtros 
 data, KPIs, tabelas, gráficos, heatmap, imposto) roda no navegador.
 
 ### Páginas
-1. **Visão Geral de Vendas** — funil completo + evolução diária (Checkouts/Vendas
-   em barras, Gasto/Faturamento bruto em linha) + tabela diária com heatmap e lucro
-   colorido + 8 KPIs secundários (vendas e lucro por dia, dias com venda, dias no
-   lucro, melhor/pior dia, ROAS de equilíbrio = bruto ÷ líquido, conversão da página)
-   + lucro por dia, retorno acumulado, checkouts/vendas por dia da semana e
+1. **Visão Geral de Vendas** — funil completo + evolução diária (Initiate
+   Checkout/Vendas em barras, Gasto/Faturamento bruto em linha) + tabela diária
+   (Gasto, IC, Custo/IC, Vendas, IC→Venda, CPA, Fat. bruto, Fat. líq., Lucro, ROAS)
+   + **4 KPIs do checkout** (Initiate Checkout com Custo/IC, Página→IC, Clique no
+   link→IC, IC→Venda) + 8 KPIs secundários (vendas e lucro por dia, dias com venda,
+   dias no lucro, melhor/pior dia, ROAS de equilíbrio = bruto ÷ líquido, conversão
+   da página) + lucro por dia, retorno acumulado, IC/vendas por dia da semana e
    conversão por etapa.
-2. **Tráfego Meta Ads** (hash `#meta`) — funil até as Vendas, tráfego diário
-   (cliques no link e visualizações em barras, custo por visualização em linha),
-   tabela diária de tráfego (Impr., CPM, Cliques, CTR, Cliq. link, Visualiz.,
-   Connect, Custo/Vis., Checkouts), Connect Rate por dia, custo por etapa por dia e
-   donut checkout→venda.
+2. **Tráfego Meta Ads** (hash `#meta`) — funil até as Vendas, tráfego diário,
+   tabela diária de tráfego (… Connect, Custo/Vis., IC, Custo/IC, Pág.→IC, Vendas,
+   IC→Venda), qualidade do tráfego (Connect Rate por dia, custo por etapa,
+   conversão por etapa), **Checkout** (IC e custo por IC por dia, taxas Página→IC
+   e IC→Venda por dia, donut IC→venda) e a **hierarquia Campanha → Conjunto →
+   Criativo**: 3 tabelas (nome + Gasto travados à esquerda, `band:'l'` →
+   `renderSplitTable`) com Impr., CPM, Cliq. link, CTR link, CPC link, Visualiz.,
+   Connect, IC, Custo/IC, Pág.→IC, Clique→IC, Vendas, IC→Venda, CPA, Fat. bruto e
+   ROAS, cada uma com gráfico de linha por dia (métrica nos botões: Gasto, CTR,
+   IC, Custo/IC, CPA) e legenda clicável.
 3. **Relatório** — espelha a Visão Geral + painel de **Metas** (Meta CPA, Meta
-   ROAS, vendas mínimas p/ avaliar a semana; `localStorage['dm_metas']`) +
-   **Resumo semanal** (segunda a domingo, mais recente no topo; Avaliável =
-   vendas ≥ mínimo, senão Em observação; CPA e ROAS colorem vs meta). Semana
-   cortada pelo período aparece parcial ("01/10 a 04/10", 4 dias).
-
-Médias "por dia" dividem pelos dias de calendário do período, do 1º ao último dia
-que a aba tem (hoje só conta quando a linha de hoje entra). Dia sem linha no meio
-conta como dia sem gasto (a aba pula dias parados, ex. 23/08 a 25/09).
+   ROAS, **Meta Custo/IC**, vendas mínimas p/ avaliar; `localStorage['dm_metas']`)
+   + **Resumo semanal** (segunda a domingo, mais recente no topo; Avaliável =
+   vendas ≥ mínimo; semana cortada pelo período aparece parcial "01/10 a 04/10")
+   + **Top Anúncios** (todos os anúncios com gasto/IC/venda; Avaliável = gasto ≥
+   `SAMPLE_MIN_SPEND` e vendas ≥ mínimo; ordem: avaliáveis, mais vendas, menor CPA,
+   mais IC, menor Custo/IC; campanha/conjunto = onde o anúncio mais gastou). CPA,
+   ROAS e Custo/IC colorem vs meta nas duas tabelas.
    **Sem Insights de Tráfego por IA** (não foi pedido; não há Routine).
 
-Filtro: só por **dia** (clique na tabela diária, Ctrl = vários) e pelo período do
-seletor; não há filtro cruzado por campanha porque a fonte não tem campanha.
+Médias "por dia" dividem pelos dias de calendário do período, do 1º ao último dia
+que as planilhas têm (hoje só conta quando a linha de hoje entra). Dia sem linha
+no meio conta como dia sem gasto (a conta pula dias parados, ex. 23/08 a 25/09).
 
-Heatmap de cor fixa por métrica: **Gasto=vermelho · Checkouts=azul · Connect
-Rate=ciano · Vendas=verde · ROAS=amarelo** (`--heat-*` em `identidade-visual.css`).
-Lucro: verde quando positivo, vermelho no prejuízo.
+**Filtro cruzado:** clique numa campanha/conjunto/anúncio (tabela ou legenda do
+gráfico) filtra a página inteira e as outras páginas; Ctrl = vários (OU dentro
+da dimensão, E entre dimensões). Cada tabela da hierarquia ignora a própria
+seleção (`metaActive('C'|'A'|'D')`) para as linhas irmãs continuarem visíveis.
+Clique numa data da tabela diária filtra por dia. A barra "Filtro ativo" no topo
+mostra tudo que está aplicado; "Remover Filtros" limpa e volta para "Este mês".
+
+Heatmap de cor fixa por métrica: **Gasto=vermelho · IC=azul (`--heat-ck`) ·
+Connect Rate=ciano · Vendas=verde · ROAS=amarelo** (`--heat-*` em
+`identidade-visual.css`). Lucro: verde quando positivo, vermelho no prejuízo.
 
 **Regras obrigatórias das tabelas** (ver `GUIA-REPLICACAO.md`): cabeçalho sticky;
 ordenação tri‑state; colunas redimensionáveis (persist localStorage); linha
 "Total Geral" fixa; dimensão nunca truncada; seleção com toggle + Ctrl multi;
-tabela diária com último dia no topo.
+filtro cruzado bidirecional; tabela diária com último dia no topo.
 
 ## Rodar/testar local
 
 ```bash
-python build/build.py --financeiro-file financeiro.csv --out dist/index.html
+python build/build.py --queries-file queries.csv --financeiro-file financeiro.csv --out dist/index.html
 # (o sandbox do agente NÃO alcança docs.google.com por curl; o WebFetch lê o CSV
-#  público. O runner do GitHub Actions tem internet e busca o CSV ao vivo.)
+#  público, mas às vezes engole células vazias — confira o nº de colunas por linha.
+#  O runner do GitHub Actions tem internet e busca os CSVs ao vivo.)
 ```
 
 ## Publicação — problemas conhecidos
@@ -166,5 +190,7 @@ python build/build.py --financeiro-file financeiro.csv --out dist/index.html
 
 ## Pendências
 - Nome do funil (hoje "Funil de Vendas").
-- Metas de CPA/ROAS (hoje "não definidas"; edite no painel ou em `META_CPA`/`META_ROAS` no `build.py`).
-- Quebra por campanha/conjunto/anúncio (só existe na aba Criativos, que deixou de ser lida a pedido do gestor).
+- Metas de CPA/ROAS/Custo por IC (hoje "não definidas"; edite no painel ou em
+  `META_CPA`/`META_ROAS`/`META_CPIC` no `build.py`).
+- cron-job.org não estava disparando em 08–09/10 (a dash só atualizava pelo
+  `schedule` do GitHub, irregular). Conferir o job do gestor.
